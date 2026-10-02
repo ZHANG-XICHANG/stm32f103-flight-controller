@@ -125,7 +125,7 @@ The flight controller publishes a snapshot of PID data and four PWM commands fro
 | ESCs | XRotor 20A 4S BLDC × 4 |
 | Propellers | 9450 |
 | Battery | 4S, 6200 mAh, 90C |
-| Remote controller | Custom dual-stick controller with a USB bridge to the PC; separate `F411_remote_hal` project |
+| Remote controller | Custom dual-stick controller with a USB bridge to the PC; [stm32f411-remote-controller](https://github.com/ZHANG-XICHANG/stm32f411-remote-controller) |
 | Programmer | ST-Link over SWD |
 
 | Flight controller | Remote controller |
@@ -193,7 +193,7 @@ This project uses an ST-Link programmer. The ELF can be flashed over SWD using S
 4. Firmware arming requires throttle below 10, yaw/pitch/roll each within 490–510, and a `power=1` event. Physical button mappings remain to be documented with the remote controller.
 5. In normal mode, throttle below 10 sends motor-stop commands. Another `power=1` event returns the controller to the disarmed state.
 
-This repository contains flight-controller firmware and desktop tools, but not the complete remote-controller firmware. The remote is a separate project, `F411_remote_hal`, which has not yet been prepared for publication. Radio control and USB telemetry require a protocol-compatible remote. A public link and matching version will be added when available.
+This repository contains flight-controller firmware and desktop tools. Remote-controller firmware is maintained in the separate [stm32f411-remote-controller](https://github.com/ZHANG-XICHANG/stm32f411-remote-controller) repository (original project name: `F411_remote_hal`). Radio control and USB telemetry require protocol-compatible remote firmware. Matching versions or commits for both ends remain to be documented.
 
 ## Desktop telemetry and PID tuning
 
@@ -281,7 +281,7 @@ P01_flight_hal.ioc         STM32CubeMX configuration
 - PID control lacks comprehensive integral limiting, reset-on-stop, and output saturation feedback handling.
 - The remote timeout threshold is 1000 ms. Link loss sends motor-stop commands; reconnecting automatically returns to `NORMAL` without requiring re-arming.
 - Control calculations assume a fixed 6 ms period. Actual execution timing and missed-read handling need further measurement and improvement.
-- Power wiring, the firmware version used in the video, and the remote-controller publication link and version remain to be documented.
+- Power wiring, the firmware version used in the video, and compatible flight-controller/remote-controller versions or commits remain to be documented.
 
 ## Learning resources and acknowledgments
 

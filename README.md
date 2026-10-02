@@ -123,7 +123,7 @@ Gyro 使用一階低通，Accel 各軸使用 Kalman 濾波，再經座標映射�
 | ESC | XRotor 20A 4S BLDC × 4 |
 | 槳葉 | 9450 |
 | 電池 | 4S、6200 mAh、90C |
-| 操控端 | 自製雙搖桿無線遙控器，提供電腦 USB 橋接；獨立專案 `F411_remote_hal` |
+| 操控端 | 自製雙搖桿無線遙控器，提供電腦 USB 橋接；[stm32f411-remote-controller](https://github.com/ZHANG-XICHANG/stm32f411-remote-controller) |
 | 燒錄器 | ST-Link，SWD 介面 |
 
 | 飛控板 | 遙控器 |
@@ -191,7 +191,7 @@ CMake target 名稱仍為 `P01_flight_hal`，因此輸出為 `build/Debug/P01_fl
 4. 韌體解鎖條件為油門小於 10、Yaw／Pitch／Roll 各在 490～510，並收到 `power=1` 事件。實體按鍵對應待遙控器文件補充。
 5. 正常模式中油門小於 10 會送出停機指令；再次收到 `power=1` 事件會回到未解鎖狀態。
 
-本儲存庫包含飛控韌體及電腦工具，未包含完整遙控器韌體。遙控器為獨立專案 `F411_remote_hal`，目前尚未整理公開。無線控制與 USB 遙測需搭配協定相容的遙控器；公開連結與對應版本將於整理後補上。
+本儲存庫包含飛控韌體及電腦工具；遙控器韌體位於獨立儲存庫 [stm32f411-remote-controller](https://github.com/ZHANG-XICHANG/stm32f411-remote-controller)（原專案名稱 `F411_remote_hal`）。無線控制與 USB 遙測需搭配協定相容的遙控器韌體，兩端對應的版本／提交紀錄仍待補充。
 
 ## 電腦遙測與 PID 調參
 
@@ -279,7 +279,7 @@ P01_flight_hal.ioc         STM32CubeMX 配置
 - PID 尚未具備完整的積分限幅、停機重置與輸出飽和回饋處理。
 - 遙控逾時門檻為 1000 ms；失聯後送出停機指令，恢復連線會自動回到 `NORMAL`，尚未要求重新解鎖。
 - 控制採固定 6 ms 計算週期，實際執行時間與漏讀處理仍待量測、改善。
-- 待補電源接線、影片對應韌體版本，以及遙控器公開連結與版本。
+- 待補電源接線、影片對應韌體版本，以及飛控與遙控器的相容版本／提交紀錄。
 
 ## 學習起點與參考來源
 
