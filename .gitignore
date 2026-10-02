@@ -1,0 +1,28 @@
+# 建置產物
+/build/
+/Debug/
+/Release/
+/mx.scratch/
+
+# Python 快取與虛擬環境
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 本機 CMake 設定
+CMakeUserPresets.json
+
+# 私人環境設定
+.env
+.env.*
+!.env.example
+
+# PID / Telemetry 實驗輸出
+telemetry*.csv
+# PID 參數資料
+/PID/
+
+# OS 暫存檔
+.DS_Store
+Thumbs.db
