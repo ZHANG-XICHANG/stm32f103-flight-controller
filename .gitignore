@@ -26,3 +26,6 @@ telemetry*.csv
 # OS 暫存檔
 .DS_Store
 Thumbs.db
+
+# Original media; README assets are curated in docs/images/
+/圖片/
