@@ -1,5 +1,7 @@
 # STM32F103 Flight Controller
 
+**繁體中文** | [English](README.en.md)
+
 以 **STM32F103、FreeRTOS、MPU6050 與 Fusion** 開發的四旋翼飛控，搭配自製無線遙控器及 Python 即時遙測／PID 調參工具。已搭載於 **F450 機架完成實際飛行測試**。
 
 專案涵蓋姿態估測、串級 PID、四馬達混控、無線操控、遙測及線上調參，並保留測試程式與通訊協定文件，供學習與後續開發參考。
