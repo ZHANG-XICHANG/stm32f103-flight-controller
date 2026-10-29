@@ -1,0 +1,292 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "nRF24L01P ACK Payload 時序（1/2）：初始化與控制週期",
+    "locale": "zh-TW",
+    "output": "docs/architecture/04a-ack-sequence-control.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/ZHANG-XICHANG/stm32f103-flight-controller.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "20403009182e01366f5a8977ab0dfac5825229a3"
+    },
+    "legend": {
+      "entries": {
+        "emphasis": {
+          "label": "RF 上行封包"
+        },
+        "default": {
+          "label": "SPI / USB 呼叫"
+        },
+        "return": {
+          "label": "回應 / ACK"
+        },
+        "dashed": {
+          "label": "預載 ACK 與任務間共享資料"
+        },
+        "security": {
+          "label": "失聯保護"
+        }
+      }
+    }
+  },
+  "participants": [
+    {
+      "id": "pc",
+      "type": "external",
+      "label": "PC 調參 GUI",
+      "sublabel": "pid_tune.py",
+      "sources": [
+        {
+          "path": "pid_tune.py",
+          "line": 159,
+          "label": "USB 序列 115200"
+        },
+        {
+          "path": "pid_tune.py",
+          "line": 198,
+          "label": "PID 指令行"
+        },
+        {
+          "path": "pid_tune.py",
+          "line": 229,
+          "end_line": 245,
+          "label": "解析回報"
+        }
+      ]
+    },
+    {
+      "id": "remote",
+      "type": "external",
+      "label": "遙控器（PTX）",
+      "sublabel": "外部韌體 · 未驗證",
+      "sources": [
+        {
+          "path": "docs/ack_sequence_test.md",
+          "line": 3,
+          "end_line": 14,
+          "label": "遙控器為另一專案"
+        }
+      ]
+    },
+    {
+      "id": "nrf",
+      "type": "cloud",
+      "icon": "none",
+      "label": "nRF24L01P",
+      "sublabel": "飛控端 PRX · 管道 0",
+      "sources": [
+        {
+          "path": "Core/Src/nRF24L01P.c",
+          "line": 544,
+          "end_line": 575,
+          "label": "L01_Init"
+        },
+        {
+          "path": "Core/Inc/nRF24L01P.h",
+          "line": 39,
+          "end_line": 50,
+          "label": "DPL / ACK_PAY / 2 Mbps"
+        },
+        {
+          "path": "Core/Src/nRF24L01P.c",
+          "line": 422,
+          "end_line": 426,
+          "label": "W_ACK_PAYLOAD"
+        }
+      ]
+    },
+    {
+      "id": "comm",
+      "type": "backend",
+      "label": "通訊任務",
+      "sublabel": "myTask02 · Receive",
+      "sources": [
+        {
+          "path": "Core/Src/freertos.c",
+          "line": 199,
+          "end_line": 248,
+          "label": "StartTask02"
+        },
+        {
+          "path": "Core/Src/receive.c",
+          "line": 15,
+          "end_line": 62,
+          "label": "ACK 排入 / 初始化"
+        },
+        {
+          "path": "Core/Src/receive.c",
+          "line": 68,
+          "end_line": 143,
+          "label": "Receive_Data"
+        }
+      ]
+    },
+    {
+      "id": "flight",
+      "type": "backend",
+      "label": "飛控任務",
+      "sublabel": "myTask · 6 ms",
+      "sources": [
+        {
+          "path": "Core/Src/flight.c",
+          "line": 452,
+          "end_line": 463,
+          "label": "Telemetry_Capture"
+        },
+        {
+          "path": "Core/Src/pid_command.c",
+          "line": 22,
+          "end_line": 43,
+          "label": "PidCommand_Apply"
+        },
+        {
+          "path": "Core/Src/flight_state.c",
+          "line": 72,
+          "end_line": 134,
+          "label": "FlightState_Process"
+        }
+      ]
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 275,
+      "label": "① 初始化 Receive_Init"
+    },
+    {
+      "from": 285,
+      "to": 640,
+      "label": "② 控制週期（6 ms 輪詢）"
+    }
+  ],
+  "messages": [
+    {
+      "id": "init",
+      "from": "comm",
+      "to": "nrf",
+      "y": 165,
+      "label": "L01_Init + L01_Check（CH40 · 2 Mbps）"
+    },
+    {
+      "id": "preload0",
+      "from": "comm",
+      "to": "nrf",
+      "y": 195,
+      "label": "預載 ACK #0（4 B 序號）",
+      "variant": "dashed",
+      "note": "必須在 CE 拉高前預載，第一個控制封包才帶得回 ACK 資料"
+    },
+    {
+      "id": "ce-high",
+      "from": "comm",
+      "to": "nrf",
+      "y": 255,
+      "label": "CE HIGH：開始接收"
+    },
+    {
+      "id": "capture",
+      "from": "flight",
+      "to": "comm",
+      "y": 300,
+      "label": "Telemetry 快照（共享記憶體）",
+      "variant": "dashed",
+      "note": "每輪混控後寫入選定軸 PID 與 4 路脈寬；臨界區保護"
+    },
+    {
+      "id": "ctrl",
+      "from": "remote",
+      "to": "nrf",
+      "y": 360,
+      "label": "控制封包 17 B（AA 55 AA + 校驗和）",
+      "variant": "emphasis"
+    },
+    {
+      "id": "hw-ack",
+      "from": "nrf",
+      "to": "remote",
+      "y": 390,
+      "label": "自動 ACK + 已預載酬載 #n",
+      "variant": "return",
+      "note": "硬體立即回覆；酬載是先前排入的資料，不是本包的處理結果"
+    },
+    {
+      "id": "poll",
+      "from": "comm",
+      "to": "nrf",
+      "y": 450,
+      "label": "讀 FIFO_STATUS → R_RX_PAYLOAD",
+      "note": "輪詢 FIFO（未用 IRQ 腳位），每輪最多 3 包"
+    },
+    {
+      "id": "payload",
+      "from": "nrf",
+      "to": "comm",
+      "y": 505,
+      "label": "17 B 酬載",
+      "variant": "return"
+    },
+    {
+      "id": "queue",
+      "from": "comm",
+      "to": "nrf",
+      "y": 535,
+      "label": "W_ACK_PAYLOAD #n+1（31 B 遙測 / 4 B 序號）",
+      "variant": "dashed",
+      "note": "TX_FULL 時不寫入；寫入成功才 ack_sequence++"
+    },
+    {
+      "id": "sticks",
+      "from": "comm",
+      "to": "flight",
+      "y": 595,
+      "label": "更新 remoteData + 連線時間",
+      "variant": "dashed",
+      "note": "幀頭與校驗和都通過才呼叫 FlightState_RemoteReceived"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "comm",
+      "from": 160,
+      "to": 260,
+      "type": "backend"
+    },
+    {
+      "participant": "comm",
+      "from": 445,
+      "to": 600,
+      "type": "backend"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "ACK 酬載內容（receive.c:15-39）",
+      "items": [
+        "尚無有效遙測：4 B 大端序 ack_sequence",
+        "有遙測快照：31 B（序號、time_ms、角度、角速度、P/D/輸出、4 路 PWM、axis）",
+        "ack_sequence 為奇數且有待回報結果：改放 24 B PID 結果"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "時序上的重點",
+      "items": [
+        "ACK 一律落後一包：本包換到的是上一輪預先排入的內容",
+        "SETUP_RETR = ARD 500 µs、ARC 5；31 B ACK 需要 500 µs 重送延遲（nRF24L01P.h:50、docs/telemetry.md）"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "無法由本 repo 確認",
+      "items": [
+        "遙控器韌體（PTX 端重送、USB 轉換、逾時處理）不在本 repo",
+        "docs/ack_telemetry.md 描述的 10 B 格式已被程式碼中的 31 B 格式取代，以程式碼為準"
+      ]
+    }
+  ]
+}

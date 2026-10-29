@@ -1,0 +1,287 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "nRF24L01P ACK Payload 時序（2/2）：PID 調參與失聯保護",
+    "locale": "zh-TW",
+    "output": "docs/architecture/04b-ack-sequence-tuning.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/ZHANG-XICHANG/stm32f103-flight-controller.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "20403009182e01366f5a8977ab0dfac5825229a3"
+    },
+    "legend": {
+      "entries": {
+        "emphasis": {
+          "label": "RF 上行封包"
+        },
+        "default": {
+          "label": "SPI / USB 呼叫"
+        },
+        "return": {
+          "label": "回應 / ACK"
+        },
+        "dashed": {
+          "label": "預載 ACK 與任務間共享資料"
+        },
+        "security": {
+          "label": "失聯保護"
+        }
+      }
+    }
+  },
+  "participants": [
+    {
+      "id": "pc",
+      "type": "external",
+      "label": "PC 調參 GUI",
+      "sublabel": "pid_tune.py",
+      "sources": [
+        {
+          "path": "pid_tune.py",
+          "line": 159,
+          "label": "USB 序列 115200"
+        },
+        {
+          "path": "pid_tune.py",
+          "line": 198,
+          "label": "PID 指令行"
+        },
+        {
+          "path": "pid_tune.py",
+          "line": 229,
+          "end_line": 245,
+          "label": "解析回報"
+        }
+      ]
+    },
+    {
+      "id": "remote",
+      "type": "external",
+      "label": "遙控器（PTX）",
+      "sublabel": "外部韌體 · 未驗證",
+      "sources": [
+        {
+          "path": "docs/ack_sequence_test.md",
+          "line": 3,
+          "end_line": 14,
+          "label": "遙控器為另一專案"
+        }
+      ]
+    },
+    {
+      "id": "nrf",
+      "type": "cloud",
+      "icon": "none",
+      "label": "nRF24L01P",
+      "sublabel": "飛控端 PRX · 管道 0",
+      "sources": [
+        {
+          "path": "Core/Src/nRF24L01P.c",
+          "line": 544,
+          "end_line": 575,
+          "label": "L01_Init"
+        },
+        {
+          "path": "Core/Inc/nRF24L01P.h",
+          "line": 39,
+          "end_line": 50,
+          "label": "DPL / ACK_PAY / 2 Mbps"
+        },
+        {
+          "path": "Core/Src/nRF24L01P.c",
+          "line": 422,
+          "end_line": 426,
+          "label": "W_ACK_PAYLOAD"
+        }
+      ]
+    },
+    {
+      "id": "comm",
+      "type": "backend",
+      "label": "通訊任務",
+      "sublabel": "myTask02 · Receive",
+      "sources": [
+        {
+          "path": "Core/Src/freertos.c",
+          "line": 199,
+          "end_line": 248,
+          "label": "StartTask02"
+        },
+        {
+          "path": "Core/Src/receive.c",
+          "line": 15,
+          "end_line": 62,
+          "label": "ACK 排入 / 初始化"
+        },
+        {
+          "path": "Core/Src/receive.c",
+          "line": 68,
+          "end_line": 143,
+          "label": "Receive_Data"
+        }
+      ]
+    },
+    {
+      "id": "flight",
+      "type": "backend",
+      "label": "飛控任務",
+      "sublabel": "myTask · 6 ms",
+      "sources": [
+        {
+          "path": "Core/Src/flight.c",
+          "line": 452,
+          "end_line": 463,
+          "label": "Telemetry_Capture"
+        },
+        {
+          "path": "Core/Src/pid_command.c",
+          "line": 22,
+          "end_line": 43,
+          "label": "PidCommand_Apply"
+        },
+        {
+          "path": "Core/Src/flight_state.c",
+          "line": 72,
+          "end_line": 134,
+          "label": "FlightState_Process"
+        }
+      ]
+    }
+  ],
+  "segments": [
+    {
+      "from": 160,
+      "to": 580,
+      "label": "③ PID 調參（24 B 指令）"
+    },
+    {
+      "from": 590,
+      "to": 660,
+      "label": "④ 失聯保護"
+    }
+  ],
+  "messages": [
+    {
+      "id": "usb-cmd",
+      "from": "pc",
+      "to": "remote",
+      "y": 175,
+      "label": "USB：PID,seq,id,Kp,Ki,Kd",
+      "note": "遙控器如何轉成 24 B 封包不在本 repo，無法確認"
+    },
+    {
+      "id": "pid-rf",
+      "from": "remote",
+      "to": "nrf",
+      "y": 235,
+      "label": "PID 指令 24 B（'PI' · CRC16）",
+      "variant": "emphasis"
+    },
+    {
+      "id": "pid-ack",
+      "from": "nrf",
+      "to": "remote",
+      "y": 265,
+      "label": "自動 ACK（前次預載酬載）",
+      "variant": "return"
+    },
+    {
+      "id": "pid-read",
+      "from": "nrf",
+      "to": "comm",
+      "y": 295,
+      "label": "24 B → PidCommand_Receive",
+      "variant": "return",
+      "note": "回傳 RECEIVE_INVALID，不刷新連線時間"
+    },
+    {
+      "id": "pending",
+      "from": "comm",
+      "to": "flight",
+      "y": 350,
+      "label": "pending 指令（臨界區）",
+      "variant": "dashed",
+      "note": "下一個 6 ms 週期由 PidCommand_Apply 改寫 Kp / Ki / Kd"
+    },
+    {
+      "id": "result",
+      "from": "flight",
+      "to": "comm",
+      "y": 420,
+      "label": "result（status 0 = 已套用）",
+      "variant": "return"
+    },
+    {
+      "id": "result-ack",
+      "from": "comm",
+      "to": "nrf",
+      "y": 450,
+      "label": "奇數序號 ACK 改放 24 B 結果",
+      "variant": "dashed",
+      "note": "result_budget = 8，結果最多再排入 8 次以防 ACK 遺失"
+    },
+    {
+      "id": "result-rf",
+      "from": "nrf",
+      "to": "remote",
+      "y": 510,
+      "label": "下一包的 ACK 帶回結果",
+      "variant": "return"
+    },
+    {
+      "id": "usb-res",
+      "from": "remote",
+      "to": "pc",
+      "y": 540,
+      "label": "USB：PID_* 結果行 / TEL 遙測行",
+      "variant": "return"
+    },
+    {
+      "id": "timeout",
+      "from": "comm",
+      "to": "flight",
+      "y": 610,
+      "label": "1000 ms 無有效封包 → LINK_DISCONNECTED",
+      "variant": "security",
+      "note": "FlightState_Process 轉為 FAIL，四顆馬達回到 1100 µs"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "comm",
+      "from": 290,
+      "to": 455,
+      "type": "backend"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "ACK 酬載內容（receive.c:15-39）",
+      "items": [
+        "尚無有效遙測：4 B 大端序 ack_sequence",
+        "有遙測快照：31 B（序號、time_ms、角度、角速度、P/D/輸出、4 路 PWM、axis）",
+        "ack_sequence 為奇數且有待回報結果：改放 24 B PID 結果"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "時序上的重點",
+      "items": [
+        "ACK 一律落後一包：本包換到的是上一輪預先排入的內容",
+        "SETUP_RETR = ARD 500 µs、ARC 5；31 B ACK 需要 500 µs 重送延遲（nRF24L01P.h:50、docs/telemetry.md）"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "無法由本 repo 確認",
+      "items": [
+        "遙控器韌體（PTX 端重送、USB 轉換、逾時處理）不在本 repo",
+        "docs/ack_telemetry.md 描述的 10 B 格式已被程式碼中的 31 B 格式取代，以程式碼為準"
+      ]
+    }
+  ]
+}

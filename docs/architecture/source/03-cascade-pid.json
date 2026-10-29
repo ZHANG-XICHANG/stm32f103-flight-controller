@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Roll / Pitch 串級 PID 控制方塊圖",
+    "locale": "zh-TW",
+    "output": "docs/architecture/03-cascade-pid.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/ZHANG-XICHANG/stm32f103-flight-controller.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "20403009182e01366f5a8977ab0dfac5825229a3"
+    },
+    "legend": {
+      "entries": {
+        "external": { "label": "輸入 / 物理系統" },
+        "backend": { "label": "控制運算（飛控任務內）" },
+        "frontend": { "label": "MCU 周邊輸出" },
+        "cloud": { "label": "感測器" },
+        "security": { "label": "油門與狀態閘控" }
+      }
+    }
+  },
+  "components": [
+    { "id": "stick", "type": "external", "label": "遙控搖桿", "sublabel": "remoteData.roll / .pitch", "pos": [40, 220], "size": [160, 72],
+      "sources": [ { "path": "Core/Src/receive.c", "line": 129, "end_line": 132, "label": "0–1000 解碼" } ] },
+    { "id": "sp", "type": "backend", "label": "設定值換算", "sublabel": "(x − 500) × 0.02", "tag": "±10°", "pos": [300, 220], "size": [160, 72],
+      "sources": [ { "path": "Core/Src/flight.c", "line": 273, "end_line": 290, "label": "pitch / roll desire" } ] },
+    { "id": "outer", "type": "backend", "label": "角度外環 PID", "sublabel": "roll_pid / pitch_pid", "tag": "Kp 7 · Ki 0 · Kd 0.05", "pos": [560, 220], "size": [160, 72],
+      "sources": [
+        { "path": "Core/Src/flight.c", "line": 34, "end_line": 56, "label": "增益初值" },
+        { "path": "Core/Src/com_pid.c", "line": 55, "end_line": 67, "label": "PID_calc_chain" }
+      ] },
+    { "id": "inner", "type": "backend", "label": "角速度內環 PID", "sublabel": "gyro_x_pid / gyro_y_pid", "tag": "Kp 0.5 · Ki 0 · Kd 0.01", "pos": [820, 220], "size": [160, 72],
+      "sources": [
+        { "path": "Core/Src/flight.c", "line": 41, "end_line": 65, "label": "增益 / D 濾波" },
+        { "path": "Core/Src/com_pid.c", "line": 6, "end_line": 52, "label": "PID_calc" }
+      ] },
+    { "id": "mixer", "type": "backend", "label": "馬達混控", "sublabel": "X 型 · 限幅 1100–1940", "pos": [1080, 220], "size": [160, 72],
+      "sources": [ { "path": "Core/Src/flight.c", "line": 341, "end_line": 429, "label": "Mixer + 限幅" } ] },
+    { "id": "esc", "type": "frontend", "label": "TIM4 → ESC × 4", "sublabel": "CCR1–4 = 脈寬 µs", "pos": [1340, 220], "size": [160, 72],
+      "sources": [
+        { "path": "Core/Src/flight.c", "line": 431, "end_line": 434, "label": "ESC_SetPulse" },
+        { "path": "Core/Src/ESC.c", "line": 61, "end_line": 71, "label": "寫入 CCR" }
+      ] },
+    { "id": "gate", "type": "security", "label": "油門 + 飛行狀態", "sublabel": "NORMAL 且 thr ≥ 10", "tag": "基礎脈寬", "pos": [1080, 40], "size": [160, 72],
+      "sources": [
+        { "path": "Core/Src/flight.c", "line": 117, "end_line": 130, "label": "油門映射" },
+        { "path": "Core/Src/flight.c", "line": 310, "end_line": 332, "label": "狀態 / 低油門停機" }
+      ] },
+    { "id": "plant", "type": "external", "label": "機體動態", "sublabel": "四旋翼（物理）", "pos": [1340, 430], "size": [160, 72] },
+    { "id": "mpu", "type": "cloud", "icon": "none", "label": "MPU6050", "sublabel": "±2000°/s · ±2 g", "pos": [1080, 430], "size": [160, 72],
+      "sources": [
+        { "path": "Core/Src/MPU6050.c", "line": 131, "end_line": 175, "label": "LSB → °/s、g" },
+        { "path": "Core/Src/MPU6050.c", "line": 69, "end_line": 71, "label": "量程設定" }
+      ] },
+    { "id": "pre", "type": "backend", "label": "前處理 + 零偏", "sublabel": "LPF α 0.15 · Kalman · Bias", "pos": [820, 430], "size": [160, 72],
+      "sources": [
+        { "path": "Core/Src/flight.c", "line": 203, "end_line": 247, "label": "濾波 / Remap / Bias" },
+        { "path": "Core/Src/com_filter.c", "line": 3, "end_line": 38, "label": "LPF / Kalman" }
+      ] },
+    { "id": "ahrs", "type": "backend", "label": "Fusion AHRS", "sublabel": "四元數 → 歐拉角", "tag": "gain 0.5", "pos": [560, 430], "size": [160, 72],
+      "sources": [
+        { "path": "Core/Src/flight.c", "line": 159, "end_line": 167, "label": "AHRS 設定" },
+        { "path": "Core/Src/flight.c", "line": 249, "end_line": 260, "label": "UpdateNoMagnetometer" }
+      ] }
+  ],
+  "connections": [
+    { "id": "raw", "from": "stick", "to": "sp", "label": "0–1000", "variant": "emphasis" },
+    { "id": "angle-sp", "from": "sp", "to": "outer", "label": "目標角 ±10°", "variant": "emphasis" },
+    { "id": "rate-sp", "from": "outer", "to": "inner", "label": "角速度目標", "variant": "emphasis" },
+    { "id": "corr", "from": "inner", "to": "mixer", "label": "修正量 µs", "variant": "emphasis" },
+    { "id": "ccr", "from": "mixer", "to": "esc", "label": "4 路脈寬", "variant": "emphasis" },
+    { "id": "base", "from": "gate", "to": "mixer", "label": "基礎脈寬 / 停機", "variant": "security" },
+    { "id": "thrust", "from": "esc", "to": "plant", "label": "推力差 → 力矩" },
+    { "id": "motion", "from": "plant", "to": "mpu", "label": "角運動" },
+    { "id": "imu", "from": "mpu", "to": "pre", "label": "°/s · g" },
+    { "id": "to-ahrs", "from": "pre", "to": "ahrs", "label": "陀螺+加速度" },
+    { "id": "rate-fb", "from": "pre", "to": "inner", "label": "body_rate.x / .y（量測）", "variant": "dashed" },
+    { "id": "angle-fb", "from": "ahrs", "to": "outer", "label": "roll / pitch 角（量測）", "variant": "dashed" }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "PID_calc（每 6 ms，dt = 0.006 s）", "items": [
+      "e = desire − measure；I += e·dt；u = Kp·e + Ki·I + Kd·D（com_pid.c:9-47）",
+      "外環 D = de/dt；內環 D = −d(measure)/dt，再經 10 Hz 一階低通（α ≈ 0.726）",
+      "串級：外環輸出直接成為內環 desire（com_pid.c:58-64）",
+      "PID_calc 內沒有輸出限幅或積分抗飽和；目前 Ki = 0，實際為 PD 控制"
+    ] },
+    { "dot": "cyan", "title": "混控（flight.c:383-405）", "items": [
+      "M1 = base − pitch − roll + yaw",
+      "M2 = base − pitch + roll − yaw",
+      "M3 = base + pitch + roll + yaw",
+      "M4 = base + pitch − roll − yaw；每路限幅 1100–1940 µs"
+    ] },
+    { "dot": "amber", "title": "同一迴圈的其他軸與調參", "items": [
+      "Yaw 只有角速度環：gyro_z_pid（Kp 2、Ki 0.1），搖桿對應 ±90°/s（flight.c:292-297）",
+      "增益可由 24 B PID 指令於執行時改寫，Ki 改變時清除積分（pid_command.c:33-41）",
+      "圖中增益為原始碼初值，不代表實機調參後的數值"
+    ] }
+  ]
+}

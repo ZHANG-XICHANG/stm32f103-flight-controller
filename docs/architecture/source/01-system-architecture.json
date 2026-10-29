@@ -1,0 +1,598 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "STM32F103 四旋翼飛控：整體系統架構",
+    "locale": "zh-TW",
+    "output": "docs/architecture/01-system-architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/ZHANG-XICHANG/stm32f103-flight-controller.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "20403009182e01366f5a8977ab0dfac5825229a3"
+    },
+    "legend": {
+      "entries": {
+        "external": {
+          "label": "外部裝置（不在本韌體內）"
+        },
+        "cloud": {
+          "label": "板上模組（感測 / 無線）"
+        },
+        "frontend": {
+          "label": "MCU 周邊"
+        },
+        "backend": {
+          "label": "韌體模組"
+        },
+        "security": {
+          "label": "安全狀態機"
+        },
+        "database": {
+          "label": "共享快照"
+        }
+      }
+    }
+  },
+  "components": [
+    {
+      "id": "mpu",
+      "type": "cloud",
+      "icon": "none",
+      "label": "MPU6050",
+      "sublabel": "I2C2 · ±2000°/s · ±2 g",
+      "pos": [
+        40,
+        40
+      ],
+      "size": [
+        160,
+        68
+      ],
+      "sources": [
+        {
+          "path": "Core/Src/MPU6050.c",
+          "line": 55,
+          "end_line": 91,
+          "label": "MPU6050_Init"
+        },
+        {
+          "path": "Core/Src/i2c.c",
+          "line": 40,
+          "end_line": 48,
+          "label": "I2C2 400 kHz"
+        }
+      ]
+    },
+    {
+      "id": "ahrs",
+      "type": "backend",
+      "label": "姿態估計",
+      "sublabel": "濾波 → Fusion AHRS",
+      "pos": [
+        310,
+        40
+      ],
+      "size": [
+        160,
+        68
+      ],
+      "sources": [
+        {
+          "path": "Core/Src/flight.c",
+          "line": 151,
+          "end_line": 183,
+          "label": "Flight_AttitudeInit"
+        },
+        {
+          "path": "Core/Src/flight.c",
+          "line": 190,
+          "end_line": 263,
+          "label": "Calculate_EulerAngle"
+        }
+      ]
+    },
+    {
+      "id": "pid",
+      "type": "backend",
+      "label": "串級 PID",
+      "sublabel": "角度外環 → 角速度內環",
+      "pos": [
+        580,
+        40
+      ],
+      "size": [
+        160,
+        68
+      ],
+      "sources": [
+        {
+          "path": "Core/Src/flight.c",
+          "line": 270,
+          "end_line": 301,
+          "label": "Calculate_PIDOutput"
+        },
+        {
+          "path": "Core/Src/com_pid.c",
+          "line": 6,
+          "end_line": 67,
+          "label": "PID_calc / PID_calc_chain"
+        }
+      ]
+    },
+    {
+      "id": "mixer",
+      "type": "backend",
+      "label": "馬達混控",
+      "sublabel": "X 型 · 限幅 1100–1940 µs",
+      "pos": [
+        850,
+        40
+      ],
+      "size": [
+        160,
+        68
+      ],
+      "sources": [
+        {
+          "path": "Core/Src/flight.c",
+          "line": 308,
+          "end_line": 450,
+          "label": "Flight_control_motor"
+        }
+      ]
+    },
+    {
+      "id": "pwm",
+      "type": "frontend",
+      "label": "TIM4 PWM",
+      "sublabel": "CH1–4 · PB6–PB9",
+      "pos": [
+        1120,
+        40
+      ],
+      "size": [
+        160,
+        68
+      ],
+      "sources": [
+        {
+          "path": "Core/Src/tim.c",
+          "line": 44,
+          "end_line": 47,
+          "label": "PSC 71 / ARR 2499"
+        },
+        {
+          "path": "Core/Src/tim.c",
+          "line": 123,
+          "end_line": 128,
+          "label": "PB6–PB9"
+        },
+        {
+          "path": "Core/Src/ESC.c",
+          "line": 61,
+          "end_line": 71,
+          "label": "ESC_SetPulse"
+        }
+      ]
+    },
+    {
+      "id": "esc",
+      "type": "external",
+      "label": "ESC × 4 + 馬達",
+      "sublabel": "M1–M4 · X 型機架",
+      "pos": [
+        1390,
+        40
+      ],
+      "size": [
+        160,
+        68
+      ],
+      "sources": [
+        {
+          "path": "Core/Inc/ESC.h",
+          "line": 7,
+          "end_line": 9,
+          "label": "脈寬範圍"
+        },
+        {
+          "path": "Core/Src/flight.c",
+          "line": 93,
+          "end_line": 115,
+          "label": "motor1–4 → TIM4"
+        }
+      ]
+    },
+    {
+      "id": "pidcmd",
+      "type": "backend",
+      "label": "PidCommand",
+      "sublabel": "24 B 調參 · CRC16",
+      "pos": [
+        310,
+        250
+      ],
+      "size": [
+        160,
+        68
+      ],
+      "sources": [
+        {
+          "path": "Core/Src/pid_command.c",
+          "line": 10,
+          "end_line": 51,
+          "label": "Receive / Apply / Result"
+        },
+        {
+          "path": "Core/Inc/pid_wire.h",
+          "line": 5,
+          "end_line": 12,
+          "label": "24 B 線上格式"
+        }
+      ]
+    },
+    {
+      "id": "recv",
+      "type": "backend",
+      "label": "Receive 封包處理",
+      "sublabel": "17 B 控制 · ACK 排入",
+      "pos": [
+        580,
+        250
+      ],
+      "size": [
+        160,
+        68
+      ],
+      "sources": [
+        {
+          "path": "Core/Src/receive.c",
+          "line": 68,
+          "end_line": 143,
+          "label": "Receive_Data"
+        },
+        {
+          "path": "Core/Src/receive.c",
+          "line": 15,
+          "end_line": 39,
+          "label": "Receive_QueueAckTelemetry"
+        }
+      ]
+    },
+    {
+      "id": "state",
+      "type": "security",
+      "label": "FlightState",
+      "sublabel": "IDLE / NORMAL / FAIL",
+      "pos": [
+        850,
+        250
+      ],
+      "size": [
+        160,
+        68
+      ],
+      "sources": [
+        {
+          "path": "Core/Src/flight_state.c",
+          "line": 28,
+          "end_line": 38,
+          "label": "失聯判斷"
+        },
+        {
+          "path": "Core/Src/flight_state.c",
+          "line": 72,
+          "end_line": 134,
+          "label": "FlightState_Process"
+        },
+        {
+          "path": "Core/Inc/flight_state.h",
+          "line": 8,
+          "label": "逾時 1000 ms"
+        }
+      ]
+    },
+    {
+      "id": "tel",
+      "type": "database",
+      "label": "Telemetry 快照",
+      "sublabel": "選定軸 PID + 4 路脈寬",
+      "pos": [
+        1120,
+        250
+      ],
+      "size": [
+        160,
+        68
+      ],
+      "sources": [
+        {
+          "path": "Core/Src/telemetry.c",
+          "line": 17,
+          "end_line": 63,
+          "label": "Capture / Copy"
+        },
+        {
+          "path": "Core/Inc/telemetry_wire.h",
+          "line": 9,
+          "end_line": 22,
+          "label": "31 B 線上格式"
+        }
+      ]
+    },
+    {
+      "id": "pc",
+      "type": "external",
+      "label": "PC 調參 GUI",
+      "sublabel": "pid_tune.py · USB 序列",
+      "pos": [
+        40,
+        460
+      ],
+      "size": [
+        160,
+        68
+      ],
+      "sources": [
+        {
+          "path": "pid_tune.py",
+          "line": 159,
+          "label": "開啟序列埠 115200"
+        },
+        {
+          "path": "pid_tune.py",
+          "line": 198,
+          "label": "送出 PID 指令"
+        },
+        {
+          "path": "pid_tune.py",
+          "line": 229,
+          "end_line": 245,
+          "label": "解析回報"
+        }
+      ]
+    },
+    {
+      "id": "remote",
+      "type": "external",
+      "label": "遙控器（PTX）",
+      "sublabel": "外部韌體 · 本 repo 無原始碼",
+      "pos": [
+        310,
+        460
+      ],
+      "size": [
+        160,
+        68
+      ],
+      "sources": [
+        {
+          "path": "docs/ack_sequence_test.md",
+          "line": 3,
+          "end_line": 5,
+          "label": "遙控器為另一專案"
+        }
+      ]
+    },
+    {
+      "id": "nrf",
+      "type": "cloud",
+      "icon": "none",
+      "label": "nRF24L01P（PRX）",
+      "sublabel": "SPI1 · CH40 · 2 Mbps",
+      "pos": [
+        580,
+        460
+      ],
+      "size": [
+        160,
+        68
+      ],
+      "sources": [
+        {
+          "path": "Core/Src/nRF24L01P.c",
+          "line": 544,
+          "end_line": 575,
+          "label": "L01_Init"
+        },
+        {
+          "path": "Core/Inc/nRF24L01P.h",
+          "line": 39,
+          "end_line": 50,
+          "label": "動態長度 / ACK 酬載"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "STM32F103C8T6 · FreeRTOS 韌體",
+      "wraps": [
+        "ahrs",
+        "pid",
+        "mixer",
+        "pwm",
+        "pidcmd",
+        "recv",
+        "state",
+        "tel"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "imu-read",
+      "from": "mpu",
+      "to": "ahrs",
+      "label": "I2C2 14 B",
+      "variant": "emphasis"
+    },
+    {
+      "id": "attitude",
+      "from": "ahrs",
+      "to": "pid",
+      "label": "姿態角+角速度",
+      "variant": "emphasis"
+    },
+    {
+      "id": "pid-out",
+      "from": "pid",
+      "to": "mixer",
+      "label": "內環輸出",
+      "variant": "emphasis"
+    },
+    {
+      "id": "ccr",
+      "from": "mixer",
+      "to": "pwm",
+      "label": "CCR 脈寬",
+      "variant": "emphasis"
+    },
+    {
+      "id": "pwm-esc",
+      "from": "pwm",
+      "to": "esc",
+      "label": "PWM × 4",
+      "variant": "emphasis"
+    },
+    {
+      "id": "pc-cmd",
+      "from": "pc",
+      "to": "remote",
+      "label": "USB 指令",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "remote-tel",
+      "from": "remote",
+      "to": "pc",
+      "label": "USB 回報",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "rf-ctrl",
+      "from": "remote",
+      "to": "nrf",
+      "label": "RF 控制封包",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "rf-ack",
+      "from": "nrf",
+      "to": "remote",
+      "label": "ACK 酬載",
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "spi-rx",
+      "from": "nrf",
+      "to": "recv",
+      "label": "SPI1 讀 RX FIFO",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "spi-ack",
+      "from": "recv",
+      "to": "nrf",
+      "label": "W_ACK_PAYLOAD",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "setpoint",
+      "from": "recv",
+      "to": "pid",
+      "label": "remoteData 設定值",
+      "variant": "emphasis"
+    },
+    {
+      "id": "link-ok",
+      "from": "recv",
+      "to": "state",
+      "label": "有效封包"
+    },
+    {
+      "id": "cmd-in",
+      "from": "recv",
+      "to": "pidcmd",
+      "label": "24 B 指令"
+    },
+    {
+      "id": "gain-set",
+      "from": "pidcmd",
+      "to": "pid",
+      "label": "改寫 Kp/Ki/Kd"
+    },
+    {
+      "id": "gate",
+      "from": "state",
+      "to": "mixer",
+      "label": "狀態閘控",
+      "variant": "security"
+    },
+    {
+      "id": "capture",
+      "from": "mixer",
+      "to": "tel",
+      "label": "Telemetry_Capture",
+      "variant": "dashed"
+    },
+    {
+      "id": "copy",
+      "from": "tel",
+      "to": "recv",
+      "label": "Telemetry_Copy",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "bottom"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "主控制路徑（每 6 ms）",
+      "items": [
+        "MPU6050 → 姿態估計 → 串級 PID → 混控 → TIM4 → ESC，全部在飛控任務 myTask 中依序執行（freertos.c:175-188）",
+        "PWM：TIM4 PSC 71、ARR 2499；以 HSE 8 MHz × PLL 9 推算為 1 µs 解析度、2.5 ms 週期（main.c:139-158、tim.c:44-47）"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "無線鏈路",
+      "items": [
+        "飛控端為 PRX：輪詢 FIFO_STATUS，未使用 IRQ 腳位（receive.c:68-85）",
+        "ACK 酬載在收到下一包前預先排入，內容是先前的遙測樣本，不是本包的執行結果（receive.c:86-92）"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "安全行為",
+      "items": [
+        "1000 ms 未收到有效 17 B 控制封包 → LINK_DISCONNECTED → FAIL，所有馬達回到 1100 µs（flight_state.c:28-38、flight.c:443-445）",
+        "非 NORMAL 狀態或油門 < 10 時一律停止馬達（flight.c:314-325）"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "程式碼中無法確認或未實作的部分",
+      "items": [
+        "遙控器韌體不在本 repo（docs/ack_sequence_test.md:5），圖中只依飛控端解析格式描述其封包",
+        "FIX_HEIGHT 狀態目前只會停止所有馬達，沒有定高控制（flight.c:439-441）",
+        "yaw_pid（偏航角外環）已宣告但未進入控制路徑；Yaw 只有角速度環（flight.c:68-72、294-297）",
+        "LED 任務 myTask03 與 USART1 debug_printf 為輔助功能，未畫入主架構"
+      ]
+    }
+  ]
+}

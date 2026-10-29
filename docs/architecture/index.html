@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>飛控架構說明</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --surface: #ffffff; --ink: #111827; --muted: #5b6474;
+    --rule: #dde1e7; --accent: #2563eb; --accent-ink: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f141b; --surface: #171e27; --ink: #e8edf3; --muted: #9aa6b5;
+      --rule: #2a3442; --accent: #6ea0ff; --accent-ink: #0f141b;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f141b; --surface: #171e27; --ink: #e8edf3; --muted: #9aa6b5;
+    --rule: #2a3442; --accent: #6ea0ff; --accent-ink: #0f141b;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: "Microsoft JhengHei", "Noto Sans TC", "PingFang TC", system-ui, sans-serif;
+    display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 12px 20px; border-bottom: 1px solid var(--rule); background: var(--surface);
+  }
+  header h1 { font-size: 18px; margin: 0; white-space: nowrap; }
+  header h1::before {
+    content: ""; display: inline-block; width: 5px; height: 18px; margin-right: 10px;
+    vertical-align: -3px; background: var(--accent); border-radius: 2px;
+  }
+  nav { display: flex; gap: 6px; flex-wrap: wrap; }
+  nav button {
+    font: inherit; font-size: 14px; color: var(--ink); background: transparent;
+    border: 1px solid var(--rule); border-radius: 6px; padding: 6px 12px; cursor: pointer;
+  }
+  nav button:hover { border-color: var(--accent); }
+  nav button[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .hint { margin-left: auto; font-size: 12px; color: var(--muted); }
+  main { flex: 1; min-height: 0; position: relative; }
+  section { position: absolute; inset: 0; display: none; }
+  section.active { display: flex; flex-direction: column; }
+  iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
+  .bar {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 10px 20px; border-top: 1px solid var(--rule); background: var(--surface); font-size: 14px;
+  }
+  .bar .point { flex: 1; min-width: 240px; color: var(--muted); }
+  .bar .point b { color: var(--ink); }
+  .bar a, .bar button {
+    font: inherit; font-size: 13px; color: var(--accent); background: none; border: 0;
+    cursor: pointer; text-decoration: none; padding: 4px 6px;
+  }
+  .bar a:hover, .bar button:hover { text-decoration: underline; }
+  #home { overflow: auto; }
+  .home-inner { max-width: 1200px; margin: 0 auto; padding: 28px 20px 40px; }
+  .home-inner p.lead { color: var(--muted); margin: 0 0 24px; line-height: 1.7; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 18px; }
+  .card {
+    display: block; text-align: left; font: inherit; color: inherit; cursor: pointer;
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 0; overflow: hidden;
+  }
+  .card:hover { border-color: var(--accent); }
+  .card img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-bottom: 1px solid var(--rule); background: #f4f5f7; }
+  .card div { padding: 12px 14px 14px; }
+  .card h2 { font-size: 16px; margin: 0 0 6px; }
+  .card p { font-size: 13px; color: var(--muted); margin: 0; line-height: 1.6; }
+  footer.meta { margin-top: 28px; font-size: 12px; color: var(--muted); line-height: 1.7; }
+  footer.meta a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>STM32F103 四旋翼飛控 · 架構說明</h1>
+  <nav role="tablist" aria-label="架構圖">
+    <button role="tab" data-i="0">總覽</button>
+    <button role="tab" data-i="1">1 系統架構</button>
+    <button role="tab" data-i="2">2 任務資料流</button>
+    <button role="tab" data-i="3">3 串級 PID</button>
+    <button role="tab" data-i="4">4 ACK 時序</button>
+  </nav>
+  <span class="hint">← / → 切換（先點一下這一列）</span>
+</header>
+
+<main>
+  <section id="home" data-i="0">
+    <div class="home-inner">
+      <p class="lead">
+        從整體架構開始，再看執行期的任務分工、控制核心，最後是無線通訊的細節。
+        每張圖都依 commit <code>2040300</code> 的原始碼繪製；在圖中點選節點可以看到引用的檔案與行號。
+      </p>
+      <div class="grid">
+        <button class="card" data-go="1"><img src="export/01-system-architecture.png" alt="整體系統架構縮圖" loading="lazy">
+          <div><h2>1 · 整體系統架構</h2><p>感測 → 姿態估計 → 串級 PID → 混控 → TIM4 PWM，搭配 nRF24L01P 遙控與遙測回傳。</p></div></button>
+        <button class="card" data-go="2"><img src="export/02-freertos-dataflow.png" alt="FreeRTOS 任務與資料流縮圖" loading="lazy">
+          <div><h2>2 · FreeRTOS 任務與資料流</h2><p>三個任務以全域變數與臨界區交換資料，沒有使用 Queue 或 Semaphore。</p></div></button>
+        <button class="card" data-go="3"><img src="export/03-cascade-pid.png" alt="串級 PID 方塊圖縮圖" loading="lazy">
+          <div><h2>3 · Roll / Pitch 串級 PID</h2><p>角度外環輸出角速度目標，內環以 body_rate 回授，每 6 ms 執行一次。</p></div></button>
+        <button class="card" data-go="4"><img src="export/04a-ack-sequence-control.png" alt="ACK Payload 時序縮圖" loading="lazy">
+          <div><h2>4 · nRF24L01P ACK Payload 時序</h2><p>ACK 酬載在收包前預先排入，所以回傳內容一律落後一包。</p></div></button>
+      </div>
+      <footer class="meta">
+        簡報用 SVG / PNG 在 <a href="https://github.com/ZHANG-XICHANG/stm32f103-flight-controller/tree/main/docs/architecture/export">export/</a>；圖的資料來源在 <a href="https://github.com/ZHANG-XICHANG/stm32f103-flight-controller/tree/main/docs/architecture/source">source/</a>；說明與未確認事項見 <a href="https://github.com/ZHANG-XICHANG/stm32f103-flight-controller/blob/main/docs/architecture/README.md">README.md</a>。
+      </footer>
+    </div>
+  </section>
+
+  <section data-i="1" data-src="01-system-architecture.html"
+    data-point="<b>重點：</b>主控制路徑全在飛控任務內依序執行；無線端是輪詢 FIFO 的 PRX，遙測經 ACK 酬載回傳。"></section>
+  <section data-i="2" data-src="02-freertos-dataflow.html"
+    data-point="<b>重點：</b>通訊任務寫入 remoteData / PidCommand / FlightState，飛控任務讀取；Telemetry 反方向回傳。"></section>
+  <section data-i="3" data-src="03-cascade-pid.html"
+    data-point="<b>重點：</b>外環 Kp 7 · Kd 0.05，內環 Kp 0.5 · Kd 0.01（D 取量測並經 10 Hz 低通）；目前 Ki = 0，實際為 PD。"></section>
+  <section data-i="4" data-src="04-ack-payload-sequence.html"
+    data-point="<b>重點：</b>本包換回的是上一輪排入的 ACK；PID 指令不刷新連線時間；1000 ms 無有效控制封包即進入 FAIL。"></section>
+</main>
+
+<script>
+  const sections = [...document.querySelectorAll('main section')];
+  const tabs = [...document.querySelectorAll('nav button')];
+  const last = sections.length - 1;
+  let current = -1;
+
+  function build(sec) {
+    if (sec.dataset.built || !sec.dataset.src) return;
+    const i = Number(sec.dataset.i);
+    const frame = document.createElement('iframe');
+    frame.src = sec.dataset.src;
+    frame.title = tabs[i].textContent;
+    const bar = document.createElement('div');
+    bar.className = 'bar';
+    bar.innerHTML =
+      `<span class="point">${sec.dataset.point}</span>` +
+      `<button data-step="-1">← 上一張</button>` +
+      (i < last ? `<button data-step="1">下一張 →</button>` : '') +
+      `<a href="${sec.dataset.src}" target="_blank" rel="noopener">新分頁開啟</a>`;
+    sec.append(frame, bar);
+    sec.dataset.built = '1';
+  }
+
+  function show(i) {
+    i = Math.max(0, Math.min(last, i));
+    if (i === current) return;
+    current = i;
+    sections.forEach((s, k) => s.classList.toggle('active', k === i));
+    tabs.forEach((t, k) => t.setAttribute('aria-selected', String(k === i)));
+    build(sections[i]);
+    history.replaceState(null, '', i ? `#${i}` : location.pathname);
+  }
+
+  document.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-i], [data-go], [data-step]');
+    if (!t) return;
+    if (t.dataset.step) show(current + Number(t.dataset.step));
+    else if (t.dataset.go) show(Number(t.dataset.go));
+    else if (t.matches('nav button')) show(Number(t.dataset.i));
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight') show(current + 1);
+    if (e.key === 'ArrowLeft') show(current - 1);
+  });
+
+  show(Number(location.hash.slice(1)) || 0);
+</script>
+</body>
+</html>

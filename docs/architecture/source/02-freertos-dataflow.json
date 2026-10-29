@@ -1,0 +1,475 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "FreeRTOS 任務與資料流",
+    "locale": "zh-TW",
+    "output": "docs/architecture/02-freertos-dataflow.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/ZHANG-XICHANG/stm32f103-flight-controller.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "20403009182e01366f5a8977ab0dfac5825229a3"
+    },
+    "legend": {
+      "entries": {
+        "emphasis": {
+          "label": "控制資料（搖桿 / 感測 / 馬達）"
+        },
+        "default": {
+          "label": "狀態與指令"
+        },
+        "dashed": {
+          "label": "回傳路徑（遙測 / ACK）"
+        },
+        "security": {
+          "label": "安全狀態（失聯 / 解鎖）"
+        }
+      }
+    }
+  },
+  "stages": [
+    {
+      "label": "無線硬體"
+    },
+    {
+      "label": "通訊任務"
+    },
+    {
+      "label": "共享資料（全域變數）"
+    },
+    {
+      "label": "控制 / 顯示任務"
+    },
+    {
+      "label": "感測 / 輸出硬體"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "nrf",
+      "type": "cloud",
+      "icon": "none",
+      "label": "nRF24L01P",
+      "sublabel": "RX / ACK FIFO",
+      "stage": 0,
+      "row": 2,
+      "width": 130,
+      "sources": [
+        {
+          "path": "Core/Src/nRF24L01P.c",
+          "line": 367,
+          "end_line": 389,
+          "label": "L01_ReadRXPayload"
+        },
+        {
+          "path": "Core/Src/nRF24L01P.c",
+          "line": 422,
+          "end_line": 426,
+          "label": "W_ACK_PAYLOAD"
+        }
+      ]
+    },
+    {
+      "id": "comm",
+      "type": "backend",
+      "label": "myTask02 通訊",
+      "sublabel": "Normal · 6 ms",
+      "tag": "≤3 包/輪",
+      "stage": 1,
+      "row": 2,
+      "width": 130,
+      "sources": [
+        {
+          "path": "Core/Src/freertos.c",
+          "line": 72,
+          "end_line": 77,
+          "label": "Normal · 512 B 堆疊"
+        },
+        {
+          "path": "Core/Src/freertos.c",
+          "line": 199,
+          "end_line": 248,
+          "label": "StartTask02"
+        }
+      ]
+    },
+    {
+      "id": "rdata",
+      "type": "database",
+      "label": "remoteData",
+      "sublabel": "油門/姿態/power",
+      "stage": 2,
+      "row": 0,
+      "width": 130,
+      "sources": [
+        {
+          "path": "Core/Src/receive.c",
+          "line": 128,
+          "end_line": 138,
+          "label": "寫入"
+        },
+        {
+          "path": "Core/Inc/receive.h",
+          "line": 8,
+          "end_line": 16,
+          "label": "RemoteData_t"
+        }
+      ]
+    },
+    {
+      "id": "cmd",
+      "type": "database",
+      "label": "PidCommand",
+      "sublabel": "pending / result",
+      "stage": 2,
+      "row": 1,
+      "width": 130,
+      "sources": [
+        {
+          "path": "Core/Src/pid_command.c",
+          "line": 10,
+          "end_line": 21,
+          "label": "Receive → pending"
+        },
+        {
+          "path": "Core/Src/pid_command.c",
+          "line": 22,
+          "end_line": 51,
+          "label": "Apply / Result"
+        }
+      ]
+    },
+    {
+      "id": "tel",
+      "type": "database",
+      "label": "Telemetry",
+      "sublabel": "latest 快照",
+      "stage": 2,
+      "row": 2,
+      "width": 130,
+      "sources": [
+        {
+          "path": "Core/Src/telemetry.c",
+          "line": 17,
+          "end_line": 63,
+          "label": "Capture / Copy"
+        }
+      ]
+    },
+    {
+      "id": "fs",
+      "type": "security",
+      "label": "FlightState",
+      "sublabel": "link / flight_state",
+      "stage": 2,
+      "row": 3,
+      "width": 130,
+      "sources": [
+        {
+          "path": "Core/Src/flight_state.c",
+          "line": 4,
+          "end_line": 38,
+          "label": "連線 / 逾時"
+        },
+        {
+          "path": "Core/Src/flight_state.c",
+          "line": 72,
+          "end_line": 140,
+          "label": "狀態轉移 / Getter"
+        }
+      ]
+    },
+    {
+      "id": "flight",
+      "type": "backend",
+      "label": "myTask 飛控",
+      "sublabel": "High · 6 ms",
+      "tag": "vTaskDelayUntil",
+      "stage": 3,
+      "row": 2,
+      "width": 130,
+      "sources": [
+        {
+          "path": "Core/Src/freertos.c",
+          "line": 65,
+          "end_line": 70,
+          "label": "High · 1024 B 堆疊"
+        },
+        {
+          "path": "Core/Src/freertos.c",
+          "line": 150,
+          "end_line": 190,
+          "label": "StartTask"
+        },
+        {
+          "path": "Core/Src/flight.c",
+          "line": 452,
+          "end_line": 463,
+          "label": "Telemetry_Capture"
+        }
+      ]
+    },
+    {
+      "id": "led",
+      "type": "backend",
+      "label": "myTask03 LED",
+      "sublabel": "Low · 20 ms",
+      "stage": 3,
+      "row": 4,
+      "width": 130,
+      "sources": [
+        {
+          "path": "Core/Src/freertos.c",
+          "line": 79,
+          "end_line": 84,
+          "label": "Low · 512 B 堆疊"
+        },
+        {
+          "path": "Core/Src/freertos.c",
+          "line": 257,
+          "end_line": 303,
+          "label": "StartTask03"
+        }
+      ]
+    },
+    {
+      "id": "mpu",
+      "type": "cloud",
+      "icon": "none",
+      "label": "MPU6050",
+      "sublabel": "I2C2 讀 14 B",
+      "stage": 4,
+      "row": 1,
+      "width": 130,
+      "sources": [
+        {
+          "path": "Core/Src/MPU6050.c",
+          "line": 131,
+          "end_line": 175,
+          "label": "read_Gyro_Accel"
+        },
+        {
+          "path": "Core/Src/flight.c",
+          "line": 197,
+          "end_line": 201,
+          "label": "讀取失敗保留姿態"
+        }
+      ]
+    },
+    {
+      "id": "tim",
+      "type": "frontend",
+      "label": "TIM4 → ESC",
+      "sublabel": "CCR1–4 µs",
+      "stage": 4,
+      "row": 2,
+      "width": 130,
+      "sources": [
+        {
+          "path": "Core/Src/flight.c",
+          "line": 431,
+          "end_line": 434,
+          "label": "ESC_SetPulse × 4"
+        },
+        {
+          "path": "Core/Src/ESC.c",
+          "line": 61,
+          "end_line": 71,
+          "label": "__HAL_TIM_SET_COMPARE"
+        }
+      ]
+    },
+    {
+      "id": "ledhw",
+      "type": "frontend",
+      "label": "LED1 / LED2",
+      "sublabel": "PB2 / PB1",
+      "stage": 4,
+      "row": 4,
+      "width": 130,
+      "sources": [
+        {
+          "path": "P01_flight_hal.ioc",
+          "line": 97,
+          "end_line": 109,
+          "label": "LED 腳位"
+        },
+        {
+          "path": "Core/Src/freertos.c",
+          "line": 268,
+          "end_line": 294,
+          "label": "閃爍規則"
+        }
+      ]
+    }
+  ],
+  "flows": [
+    {
+      "id": "rx",
+      "from": "nrf",
+      "to": "comm",
+      "label": "17/24 B 酬載",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelDy": 20
+    },
+    {
+      "id": "ack",
+      "from": "comm",
+      "to": "nrf",
+      "label": "ACK 酬載",
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "right",
+      "labelDy": -20
+    },
+    {
+      "id": "pending",
+      "from": "comm",
+      "to": "cmd",
+      "label": "24 B 指令",
+      "fromSide": "top",
+      "toSide": "left",
+      "labelSegment": 1
+    },
+    {
+      "id": "result",
+      "from": "cmd",
+      "to": "comm",
+      "label": "套用結果",
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "top",
+      "labelSegment": 0,
+      "labelDx": 20,
+      "labelDy": 16
+    },
+    {
+      "id": "sticks",
+      "from": "comm",
+      "to": "rdata",
+      "label": "搖桿值",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "left",
+      "labelSegment": 1
+    },
+    {
+      "id": "link",
+      "from": "comm",
+      "to": "fs",
+      "label": "有效封包/逾時",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "left"
+    },
+    {
+      "id": "copy",
+      "from": "tel",
+      "to": "comm",
+      "label": "Copy",
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "setpoint",
+      "from": "rdata",
+      "to": "flight",
+      "label": "設定值/油門",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "top",
+      "labelSegment": 0
+    },
+    {
+      "id": "apply",
+      "from": "cmd",
+      "to": "flight",
+      "label": "Apply 增益",
+      "fromSide": "right",
+      "toSide": "top",
+      "labelSegment": 0
+    },
+    {
+      "id": "state",
+      "from": "fs",
+      "to": "flight",
+      "label": "Process",
+      "variant": "security",
+      "fromSide": "right",
+      "toSide": "bottom"
+    },
+    {
+      "id": "capture",
+      "from": "flight",
+      "to": "tel",
+      "label": "Capture",
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "imu",
+      "from": "mpu",
+      "to": "flight",
+      "label": "陀螺/加速度",
+      "variant": "emphasis",
+      "fromSide": "left",
+      "toSide": "top",
+      "labelSegment": 0
+    },
+    {
+      "id": "pwm",
+      "from": "flight",
+      "to": "tim",
+      "label": "4 路脈寬",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "ledstate",
+      "from": "fs",
+      "to": "led",
+      "label": "Get 狀態",
+      "variant": "security"
+    },
+    {
+      "id": "gpio",
+      "from": "led",
+      "to": "ledhw",
+      "label": "GPIO"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "三個任務（freertos.c:64-131）",
+      "items": [
+        "myTask（High，6 ms）：FlightState_Process → Calculate_EulerAngle → Calculate_PIDOutput → Flight_control_motor",
+        "myTask02（Normal，6 ms）：無線未就緒時每 100 ms 重試 Receive_Init；每輪最多讀 3 包，最後呼叫 FlightState_Update",
+        "myTask03（Low，20 ms）：LED2 在 IDLE 長亮；LED1 連線 500 ms、失聯 100 ms 切換"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "任務間共享方式",
+      "items": [
+        "程式未建立 Queue / Semaphore / Mutex（freertos.c:107-121 皆為空），任務以全域變數交換資料",
+        "Telemetry、PidCommand 與 remoteData.power 讀取時使用 taskENTER_CRITICAL 保護；remoteData 其他欄位直接讀寫"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "連線新鮮度",
+      "items": [
+        "只有通過幀頭與校驗的 17 B 控制封包會呼叫 FlightState_RemoteReceived（freertos.c:224-228）",
+        "24 B PID 指令回傳 RECEIVE_INVALID，不會刷新連線時間（receive.c:93-97）"
+      ]
+    }
+  ]
+}
