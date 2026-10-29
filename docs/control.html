@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>控制系統 · STM32F103 四旋翼飛控</title>
+<meta name="description" content="Roll/Pitch 串級 PID、Yaw 角速度 PI、X 型混控與輸出限制；互動方塊圖、混控計算器與示意模擬。">
+<meta name="theme-color" content="#0b1016">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/css/site.css">
+</head>
+<body>
+<!-- layout:header -->
+<header class="site-header"><div class="inner">
+  <a class="brand" href="index.html">STM32F103 四旋翼飛控</a>
+  <nav class="primary-nav" aria-label="章節"><ul>
+    <li><a href="index.html">首頁</a></li>
+    <li><a href="hardware.html"><span class="num">01</span>硬體</a></li>
+    <li><a href="software.html"><span class="num">02</span>軟體</a></li>
+    <li><a href="ahrs.html"><span class="num">03</span>AHRS</a></li>
+    <li><a href="control.html" aria-current="page"><span class="num">04</span>控制</a></li>
+    <li><a href="comm.html"><span class="num">05</span>通訊</a></li>
+    <li><a href="experiments.html"><span class="num">06</span>實驗</a></li>
+    <li><a href="research.html"><span class="num">07</span>研究延伸</a></li>
+    <li><a href="architecture/">架構圖</a></li>
+  </ul></nav>
+</div></header>
+<!-- /layout:header -->
+
+<div class="page has-toc">
+<aside class="toc"><div class="toc-inner"><details open><summary>本頁目錄</summary><h2>本頁目錄</h2><ol>
+  <li><a href="#diagram">互動方塊圖</a></li>
+  <li><a href="#gains">增益與公式</a></li>
+  <li><a href="#pid-impl">PID 實作細節</a></li>
+  <li><a href="#mixer">混控與限幅</a></li>
+  <li><a href="#sim">示意模擬</a></li>
+  <li><a href="#state">狀態閘控</a></li>
+  <li><a href="#limits">限制</a></li>
+</ol></details></div></aside>
+
+<main>
+  <div class="page-head">
+    <div class="eyebrow">04 · Control</div>
+    <h1>控制系統</h1>
+    <p class="lead">Roll 與 Pitch 使用「角度外環 → 角速度內環」串級 PID；Yaw 只有角速度 PI。三軸輸出以 PWM 修正量（µs）的形式進入 X 型混控，再限制在 1100–1940 µs 送到 ESC。</p>
+  </div>
+
+  <div class="tldr"><h2>本頁重點</h2><ul>
+    <li>串級結構讓內環先壓住角速度擾動，外環只需處理較慢的角度誤差；兩環都在同一個 6 ms 週期內依序計算。</li>
+    <li>目前 Roll/Pitch 的 Ki = 0，實際是 PD 控制；內環 D 項採量測微分加 10 Hz 低通。</li>
+    <li>PID 本身沒有輸出限幅與積分抗飽和，限幅只發生在混控之後。</li>
+  </ul></div>
+
+  <h2 id="diagram"><span class="sec-num">4.1</span>互動方塊圖</h2>
+  <p class="small muted">點選任一方塊（或用 Tab 鍵選取後按 Enter）查看說明與程式碼依據。</p>
+  <div class="panel blockdiag">
+    <div class="svg-scroll"><svg data-wide id="pid-diagram" viewBox="0 0 1040 310" role="group" aria-label="串級 PID 控制方塊圖">
+      <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c2ccd6"/></marker>
+        <marker id="ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#8d9bab"/></marker></defs>
+      <!-- 連線 -->
+      <g class="wire" marker-end="url(#ah)">
+        <path d="M110 130 H133"/><path d="M245 130 H264"/><path d="M294 130 H310"/><path d="M442 130 H462"/><path d="M492 130 H508"/>
+        <path d="M640 130 H673"/><path d="M785 130 H808"/><path d="M900 130 H923"/>
+        <path d="M977 154 V244"/><path d="M925 270 H892"/><path d="M760 270 H444"/>
+        <path d="M110 40 H133"/><path d="M245 40 H462"/><path d="M492 40 H508"/><path d="M640 40 H700 V104"/>
+        <path d="M775 62 V104"/>
+      </g>
+      <g class="wire fb" marker-end="url(#ahm)">
+        <path d="M800 246 V205 H478 V146"/>
+        <path d="M377 246 V222 H280 V146"/>
+        <path d="M478 92 V56"/>
+      </g>
+      <g class="wlabel">
+        <text x="247" y="148">±10°</text><text x="444" y="148">°/s</text><text x="648" y="148">µs</text><text x="787" y="148">×4</text>
+        <text x="560" y="198">body_rate.x / .y（量測）</text><text x="290" y="216">roll / pitch（量測）</text>
+        <text x="486" y="80">body_rate.z</text><text x="560" y="264">濾波後角速度</text><text x="250" y="58">±90°/s</text>
+      </g>
+      <!-- 加總點 -->
+      <g class="sum"><circle cx="280" cy="130" r="14"/><text x="266" y="122" font-size="11">+</text><text x="284" y="160" font-size="13">−</text><text x="280" y="135" text-anchor="middle">Σ</text></g>
+      <g class="sum"><circle cx="478" cy="130" r="14"/><text x="464" y="122" font-size="11">+</text><text x="482" y="160" font-size="13">−</text><text x="478" y="135" text-anchor="middle">Σ</text></g>
+      <g class="sum"><circle cx="478" cy="40" r="14"/><text x="464" y="32" font-size="11">+</text><text x="482" y="70" font-size="13">−</text><text x="478" y="45" text-anchor="middle">Σ</text></g>
+      <!-- 方塊 -->
+      <g class="blk" data-block="stick"><rect x="10" y="106" width="100" height="48"/><text x="60" y="127" text-anchor="middle">遙控搖桿</text><text class="sub" x="60" y="144" text-anchor="middle">roll / pitch</text></g>
+      <g class="blk" data-block="sp"><rect x="135" y="106" width="110" height="48"/><text x="190" y="127" text-anchor="middle">設定值換算</text><text class="sub" x="190" y="144" text-anchor="middle">(x−500)×0.02</text></g>
+      <g class="blk" data-block="outer"><rect x="312" y="106" width="130" height="48"/><text x="377" y="127" text-anchor="middle">角度外環 PID</text><text class="sub" x="377" y="144" text-anchor="middle">Kp 7 · Kd 0.05</text></g>
+      <g class="blk" data-block="inner"><rect x="510" y="106" width="130" height="48"/><text x="575" y="127" text-anchor="middle">角速度內環 PID</text><text class="sub" x="575" y="144" text-anchor="middle">Kp 0.5 · Kd 0.01</text></g>
+      <g class="blk" data-block="mixer"><rect x="675" y="106" width="110" height="48"/><text x="730" y="127" text-anchor="middle">混控 + 限幅</text><text class="sub" x="730" y="144" text-anchor="middle">1100–1940 µs</text></g>
+      <g class="blk" data-block="esc"><rect x="810" y="106" width="90" height="48"/><text x="855" y="127" text-anchor="middle">TIM4</text><text class="sub" x="855" y="144" text-anchor="middle">→ ESC ×4</text></g>
+      <g class="blk phys" data-block="plant"><rect x="925" y="106" width="105" height="48"/><text x="977" y="127" text-anchor="middle">機體動態</text><text class="sub" x="977" y="144" text-anchor="middle">物理系統</text></g>
+      <g class="blk sensor" data-block="mpu"><rect x="925" y="246" width="105" height="48"/><text x="977" y="267" text-anchor="middle">MPU6050</text><text class="sub" x="977" y="284" text-anchor="middle">°/s · g</text></g>
+      <g class="blk" data-block="pre"><rect x="760" y="246" width="130" height="48"/><text x="825" y="267" text-anchor="middle">低通 + Bias</text><text class="sub" x="825" y="284" text-anchor="middle">α 0.15 ≈ 4.3 Hz</text></g>
+      <g class="blk" data-block="ahrs"><rect x="312" y="246" width="130" height="48"/><text x="377" y="267" text-anchor="middle">Fusion AHRS</text><text class="sub" x="377" y="284" text-anchor="middle">四元數→歐拉角</text></g>
+      <g class="blk" data-block="gate"><rect x="720" y="16" width="110" height="46"/><text x="775" y="36" text-anchor="middle">油門 / 狀態</text><text class="sub" x="775" y="53" text-anchor="middle">NORMAL·thr≥10</text></g>
+      <g class="blk" data-block="yawsp"><rect x="135" y="16" width="110" height="48"/><text x="190" y="37" text-anchor="middle">Yaw 設定值</text><text class="sub" x="190" y="54" text-anchor="middle">±90 °/s</text></g>
+      <g class="blk" data-block="stick"><rect x="10" y="16" width="100" height="48"/><text x="60" y="37" text-anchor="middle">遙控搖桿</text><text class="sub" x="60" y="54" text-anchor="middle">yaw</text></g>
+      <g class="blk" data-block="gyroz"><rect x="510" y="16" width="130" height="48"/><text x="575" y="37" text-anchor="middle">Yaw 角速度 PI</text><text class="sub" x="575" y="54" text-anchor="middle">Kp 2 · Ki 0.1</text></g>
+    </svg></div>
+    <p class="scroll-hint">← 圖可左右滑動 →</p>
+    <div id="block-detail" class="block-detail" aria-live="polite"></div>
+    <p class="small muted" style="margin:8px 0 0">實線為訊號主路徑、虛線為量測回授、虛框為物理系統。Archify 版（附完整行號）：<a href="architecture/03-cascade-pid.html" target="_blank" rel="noopener">03 串級 PID 互動圖</a>。</p>
+  </div>
+
+  <h2 id="gains"><span class="sec-num">4.2</span>增益與公式</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>控制器</th><th>變數</th><th class="num">Kp</th><th class="num">Ki</th><th class="num">Kd</th><th>D 項</th><th>輸入 → 輸出</th></tr></thead>
+    <tbody>
+      <tr><td>Roll 角度外環</td><td><code>roll_pid</code></td><td class="num">7.0</td><td class="num">0</td><td class="num">0.05</td><td>誤差微分</td><td>° → °/s</td></tr>
+      <tr><td>Pitch 角度外環</td><td><code>pitch_pid</code></td><td class="num">7.0</td><td class="num">0</td><td class="num">0.05</td><td>誤差微分</td><td>° → °/s</td></tr>
+      <tr><td>Roll 角速度內環</td><td><code>gyro_x_pid</code></td><td class="num">0.5</td><td class="num">0</td><td class="num">0.01</td><td>量測微分 + 10 Hz LPF</td><td>°/s → µs</td></tr>
+      <tr><td>Pitch 角速度內環</td><td><code>gyro_y_pid</code></td><td class="num">0.5</td><td class="num">0</td><td class="num">0.01</td><td>量測微分 + 10 Hz LPF</td><td>°/s → µs</td></tr>
+      <tr><td>Yaw 角速度</td><td><code>gyro_z_pid</code></td><td class="num">2.0</td><td class="num">0.1</td><td class="num">0</td><td>—</td><td>°/s → µs</td></tr>
+      <tr><td class="muted">Yaw 角度外環（未使用）</td><td><code>yaw_pid</code></td><td class="num">1.0</td><td class="num">0</td><td class="num">0</td><td>—</td><td>未接入</td></tr>
+    </tbody>
+  </table></div>
+  <div class="sources"><span><span class="tag code">程式碼</span> 預設值</span><span class="src" data-src="Core/Src/flight.c:34-81"></span><span>與 README 記載的實飛參數一致；可經 24 B 指令於執行時改寫（只改 RAM）。</span></div>
+  <div class="formula">e[k]  = desire − measure
+I[k]  = I[k−1] + e[k]·dt                         dt = 0.006 s（PID_PERIOD）
+D_raw = (e[k] − e[k−1]) / dt                      外環
+D_raw = −(m[k] − m[k−1]) / dt                     內環（d_on_measurement）
+D[k]  = α·D[k−1] + (1−α)·D_raw,  α = 1/(1+2π·10·dt) ≈ 0.726
+u[k]  = Kp·e + Ki·I + Kd·D</div>
+  <div class="sources"><span>依據</span><span class="src" data-src="Core/Src/com_pid.c:6-52"></span><span class="src" data-src="Core/Inc/com_pid.h:6"></span></div>
+
+  <h2 id="pid-impl"><span class="sec-num">4.3</span>PID 實作細節</h2>
+  <div class="grid two">
+    <div class="card"><h3>為何內環用量測微分</h3><p>外環輸出（內環目標）每 6 ms 都可能跳動；若對誤差微分，目標的跳變會被放大成 D 項尖峰。改用 <code>−d(measure)/dt</code> 只對機體真實的角速度變化反應，再加 10 Hz 低通壓低陀螺雜訊。</p></div>
+    <div class="card"><h3>首次取樣不產生尖峰</h3><p><code>initialized == 0</code> 時把微分設為 0，只記錄基準值，避免開機第一個週期出現巨大的 D 項 <span class="src" data-src="Core/Src/com_pid.c:14-20"></span>。</p></div>
+    <div class="card"><h3>串級的連接方式</h3><p><code>PID_calc_chain()</code> 先算外環，再把外環 <code>output</code> 直接寫入內環 <code>desire</code>，中間沒有角速度目標限幅 <span class="src" data-src="Core/Src/com_pid.c:55-67"></span>。</p></div>
+    <div class="card"><h3>線上改參數</h3><p><code>PidCommand_Apply()</code> 在每輪 PID 前整組套用新增益；只有 Ki 改變時清除積分，D 歷史保留 <span class="src" data-src="Core/Src/pid_command.c:22-43"></span>。</p></div>
+  </div>
+
+  <h2 id="mixer"><span class="sec-num">4.4</span>混控與輸出限制</h2>
+  <div class="formula">base = 1100 + thr × 840 / 1000        （thr 0–1000，整數運算）
+M1 = base − pitch − roll + yaw         前左  CCW
+M2 = base − pitch + roll − yaw         前右  CW
+M3 = base + pitch + roll + yaw         後右  CCW
+M4 = base + pitch − roll − yaw         後左  CW
+Mi = clamp(Mi, 1100, 1940)</div>
+  <div class="sources"><span>依據</span><span class="src" data-src="Core/Src/flight.c:117-130"></span><span class="src" data-src="Core/Src/flight.c:383-429"></span></div>
+
+  <div class="panel" id="mixer">
+    <div class="panel-head"><h3>混控計算器</h3><span class="tag derived">依程式公式計算</span><span class="spacer"></span>
+      <button data-mx="500,0,0,0">懸停</button><button data-mx="500,80,0,0">Roll 修正 +80</button><button data-mx="950,150,0,0">高油門 + 修正（觸發限幅）</button></div>
+    <p class="small muted" style="margin-top:0">重現 <code>Flight_control_motor()</code> 的整數運算；輸入是假設值，不是量測值。</p>
+    <div class="grid two">
+      <div class="control-stack">
+        <div class="control"><label for="mx-thr">油門 thr</label><input type="range" id="mx-thr" min="0" max="1000" step="10" value="500"><output id="mx-thr-out">500</output></div>
+        <div class="control"><label for="mx-roll">roll 修正</label><input type="range" id="mx-roll" min="-300" max="300" step="5" value="0"><output id="mx-roll-out">0</output></div>
+        <div class="control"><label for="mx-pitch">pitch 修正</label><input type="range" id="mx-pitch" min="-300" max="300" step="5" value="0"><output id="mx-pitch-out">0</output></div>
+        <div class="control"><label for="mx-yaw">yaw 修正</label><input type="range" id="mx-yaw" min="-300" max="300" step="5" value="0"><output id="mx-yaw-out">0</output></div>
+        <div class="control"><label for="mx-state">飛行狀態</label><select id="mx-state"><option>NORMAL</option><option>IDLE</option><option>FAIL</option><option>FIX_HEIGHT</option></select><span></span></div>
+      </div>
+      <div>
+        <div class="control-stack" style="font-size:14px">
+          <div><span class="mono">M1 前左</span> <span id="mx-val-0" class="mono muted"></span><div style="background:var(--surface-2);border-radius:4px;height:12px"><div id="mx-bar-0" style="height:12px;border-radius:4px"></div></div></div>
+          <div><span class="mono">M2 前右</span> <span id="mx-val-1" class="mono muted"></span><div style="background:var(--surface-2);border-radius:4px;height:12px"><div id="mx-bar-1" style="height:12px;border-radius:4px"></div></div></div>
+          <div><span class="mono">M3 後右</span> <span id="mx-val-2" class="mono muted"></span><div style="background:var(--surface-2);border-radius:4px;height:12px"><div id="mx-bar-2" style="height:12px;border-radius:4px"></div></div></div>
+          <div><span class="mono">M4 後左</span> <span id="mx-val-3" class="mono muted"></span><div style="background:var(--surface-2);border-radius:4px;height:12px"><div id="mx-bar-3" style="height:12px;border-radius:4px"></div></div></div>
+        </div>
+        <p class="small muted" style="margin:6px 0 0">長條範圍 1000–2000 µs；橘色代表被限幅。</p>
+        <p id="mx-note" class="small" style="margin:8px 0 0"></p>
+      </div>
+    </div>
+  </div>
+
+  <h2 id="sim"><span class="sec-num">4.5</span>串級 PID 示意模擬（單軸 Roll）</h2>
+  <div class="sim-banner"><b>◇ 模擬，不是實測</b>　控制器逐行重現 <code>com_pid.c</code>；但<b>機體以假設的二階模型表示</b>（角加速度 = b × 修正量，經時間常數 τ 的一階馬達延遲），b 與 τ 未經系統識別。用途是說明「陀螺低通的相位落後會降低內環可用增益」，數值不能代表實機。</div>
+  <div class="panel">
+    <div class="panel-head"><h3>參數</h3><span class="spacer"></span>
+      <button id="sim-reset">韌體預設值</button>
+      <button data-sim='{"sim-kpi":1.2}'>內環 Kp 1.2</button>
+      <button data-sim='{"sim-kpi":1.2,"lpf":false}'>Kp 1.2 + 移除低通</button>
+      <button data-sim='{"sim-kdi":0.08}'>內環 Kd 0.08</button>
+    </div>
+    <div class="grid">
+      <div class="control-stack">
+        <div class="control"><label for="sim-kpo">外環 Kp</label><input type="range" id="sim-kpo" min="0" max="15" step="0.1" value="7"><output id="sim-kpo-out"></output></div>
+        <div class="control"><label for="sim-kdo">外環 Kd</label><input type="range" id="sim-kdo" min="0" max="0.3" step="0.01" value="0.05"><output id="sim-kdo-out"></output></div>
+      </div>
+      <div class="control-stack">
+        <div class="control"><label for="sim-kpi">內環 Kp</label><input type="range" id="sim-kpi" min="0" max="3" step="0.05" value="0.5"><output id="sim-kpi-out"></output></div>
+        <div class="control"><label for="sim-kii">內環 Ki</label><input type="range" id="sim-kii" min="0" max="2" step="0.05" value="0"><output id="sim-kii-out"></output></div>
+        <div class="control"><label for="sim-kdi">內環 Kd</label><input type="range" id="sim-kdi" min="0" max="0.15" step="0.005" value="0.01"><output id="sim-kdi-out"></output></div>
+      </div>
+      <div class="control-stack">
+        <div class="control"><label for="sim-b">假設 b</label><input type="range" id="sim-b" min="10" max="100" step="5" value="40"><output id="sim-b-out"></output></div>
+        <div class="control"><label for="sim-tau">假設 τ (s)</label><input type="range" id="sim-tau" min="0.01" max="0.1" step="0.005" value="0.04"><output id="sim-tau-out"></output></div>
+        <div class="controls" style="margin:0">
+          <label class="chk"><input type="checkbox" id="sim-lpf" checked>陀螺低通 α 0.15</label>
+          <select id="sim-scenario" aria-label="模擬情境"><option value="step">5° 角度步階</option><option value="dist">角速度擾動脈衝</option></select>
+        </div>
+      </div>
+    </div>
+    <p id="sim-verdict" class="small" style="margin:10px 0 6px" aria-live="polite"></p>
+    <div id="sim-plots"></div>
+    <p class="small muted" style="margin:8px 0 0">滑鼠拖曳可放大時間軸、雙擊還原；觸控裝置點一下顯示數值。b 單位：°/s² 每 µs；修正量在 ±400 µs 處截斷以近似混控限幅。</p>
+  </div>
+  <p>模擬的定性結論與<a href="experiments.html#oscillation">實驗</a>一致：保留 α = 0.15 的陀螺低通時，提高內環 Kp 會出現約 3.5–4.5 Hz 的振盪或發散；拿掉低通後同樣的增益仍可收斂。實機上能否放寬低通，還需要評估馬達振動雜訊（見<a href="research.html#filter">研究延伸</a>）。</p>
+
+  <h2 id="state"><span class="sec-num">4.6</span>狀態閘控</h2>
+  <ul class="tight">
+    <li><b>IDLE</b>：開機狀態，馬達 1100 µs。解鎖條件：油門 &lt; 10、Yaw/Pitch/Roll 皆在 490–510，且收到 <code>power = 1</code> 事件 <span class="src" data-src="Core/Src/flight_state.c:49-89"></span>。</li>
+    <li><b>NORMAL</b>：唯一會混控的狀態；油門 &lt; 10 時仍停機。</li>
+    <li><b>FAIL</b>：失聯（1000 ms）時進入，停機；恢復連線後自動回到 NORMAL，不需要重新解鎖（README 已列為限制）。</li>
+    <li><b>FIX_HEIGHT</b>：定高未實作，只停止馬達 <span class="src" data-src="Core/Src/flight.c:439-441"></span>。</li>
+  </ul>
+  <p>完整狀態轉移圖見<a href="comm.html#failsafe">通訊 · 失聯保護</a>。</p>
+
+  <h2 id="limits"><span class="sec-num">4.7</span>限制</h2>
+  <ul class="tight">
+    <li>PID 沒有輸出限幅、積分限幅或抗飽和；Yaw 的 Ki = 0.1 在長時間偏差下會持續累積。</li>
+    <li>停機（IDLE / FAIL / 低油門）時 PID 仍持續計算，積分與微分狀態不會重置。</li>
+    <li>混控限幅後沒有回饋給 PID；高油門時修正量可能被截掉，實際力矩比要求的小。</li>
+    <li>設定值直接取搖桿，沒有斜率限制；外環 D 對誤差微分，搖桿快速變化會產生尖峰。</li>
+  </ul>
+
+  <nav class="pager" aria-label="章節切換">
+    <a class="prev" href="ahrs.html"><span class="dir">← 上一頁</span>03 姿態估測 AHRS</a>
+    <a class="next" href="comm.html"><span class="dir">下一頁 →</span>05 無線通訊</a>
+  </nav>
+</main>
+</div>
+
+<!-- layout:footer -->
+<footer class="site-footer"><div class="inner">
+  <div class="legend-tags">標記說明：
+    <span class="tag measured">實測</span>實驗資料或實拍
+    <span class="tag derived">推算</span>由程式碼或資料計算
+    <span class="tag sim">模擬</span>假設模型的示意結果
+    <span class="tag code">程式碼</span>原始碼設定值
+    <span class="tag missing">待補</span>尚無資料
+  </div>
+  <div>技術內容依韌體 commit <code>2040300</code>；<span class="mono">⌗</span> 標記可連到 GitHub 對應行號。原始碼：<a href="https://github.com/ZHANG-XICHANG/stm32f103-flight-controller" target="_blank" rel="noopener">ZHANG-XICHANG/stm32f103-flight-controller</a></div>
+</div></footer>
+<!-- /layout:footer -->
+<script src="assets/js/site.js"></script>
+<script src="assets/js/plot.js"></script>
+<script src="assets/js/control.js"></script>
+</body>
+</html>

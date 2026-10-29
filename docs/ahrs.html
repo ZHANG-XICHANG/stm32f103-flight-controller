@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>姿態估測 AHRS · STM32F103 四旋翼飛控</title>
+<meta name="description" content="MPU6050 前處理、Fusion AHRS、四元數與歐拉角；可互動的 3D 姿態模型與實測 Roll 播放。">
+<meta name="theme-color" content="#0b1016">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/css/site.css">
+</head>
+<body>
+<!-- layout:header -->
+<header class="site-header"><div class="inner">
+  <a class="brand" href="index.html">STM32F103 四旋翼飛控</a>
+  <nav class="primary-nav" aria-label="章節"><ul>
+    <li><a href="index.html">首頁</a></li>
+    <li><a href="hardware.html"><span class="num">01</span>硬體</a></li>
+    <li><a href="software.html"><span class="num">02</span>軟體</a></li>
+    <li><a href="ahrs.html" aria-current="page"><span class="num">03</span>AHRS</a></li>
+    <li><a href="control.html"><span class="num">04</span>控制</a></li>
+    <li><a href="comm.html"><span class="num">05</span>通訊</a></li>
+    <li><a href="experiments.html"><span class="num">06</span>實驗</a></li>
+    <li><a href="research.html"><span class="num">07</span>研究延伸</a></li>
+    <li><a href="architecture/">架構圖</a></li>
+  </ul></nav>
+</div></header>
+<!-- /layout:header -->
+
+<div class="page has-toc">
+<aside class="toc"><div class="toc-inner"><details open><summary>本頁目錄</summary><h2>本頁目錄</h2><ol>
+  <li><a href="#pipeline">處理流程</a></li>
+  <li><a href="#prefilter">前處理濾波</a></li>
+  <li><a href="#fusion">Fusion AHRS</a></li>
+  <li><a href="#model">3D 姿態模型</a></li>
+  <li><a href="#euler">四元數與歐拉角</a></li>
+  <li><a href="#signs">符號約定</a></li>
+  <li><a href="#limits">限制</a></li>
+</ol></details></div></aside>
+
+<main>
+  <div class="page-head">
+    <div class="eyebrow">03 · Attitude estimation</div>
+    <h1>姿態估測（AHRS）</h1>
+    <p class="lead">每 6 ms 讀一次 MPU6050 的角速度與加速度，經過前處理後交給 Seb Madgwick 的 <a href="https://github.com/xioTechnologies/Fusion" target="_blank" rel="noopener">Fusion</a> 函式庫，以四元數積分陀螺儀、用加速度計修正傾角，最後轉成 Roll / Pitch / Yaw 供 PID 使用。</p>
+  </div>
+
+  <div class="tldr"><h2>本頁重點</h2><ul>
+    <li>流程：LPF / Kalman → <code>FusionRemap</code> → <code>FusionBias</code> → <code>FusionAhrsUpdateNoMagnetometer</code> → <code>FusionQuaternionToEuler</code>。</li>
+    <li>無磁力計：Roll / Pitch 由重力修正；Yaw 只靠陀螺積分，開機時歸零、長時間會漂移。</li>
+    <li><span class="tag derived">推算</span> 陀螺低通（α = 0.15）在 166.7 Hz 下截止頻率約 <b>4.3 Hz</b>，進入角速度內環前已有明顯相位落後，與<a href="experiments.html#oscillation">實驗中的 4 Hz 振盪</a>有關。</li>
+  </ul></div>
+
+  <h2 id="pipeline"><span class="sec-num">3.1</span>處理流程</h2>
+  <figure class="frame svgfig">
+    <svg data-wide viewBox="0 0 900 230" role="img" aria-label="AHRS 處理流程：MPU6050 經濾波、座標映射、零偏、Fusion 更新到歐拉角，角速度另外送給內環">
+      <defs><marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c2ccd6"/></marker></defs>
+      <g font-size="13" text-anchor="middle">
+        <rect x="10" y="60" width="120" height="64" rx="8" fill="#18212c" stroke="#3987e5"/><text x="70" y="88" fill="#e6edf3">MPU6050</text><text x="70" y="108" fill="#8d9bab" font-size="11">°/s · g（扣零偏）</text>
+        <rect x="160" y="20" width="140" height="56" rx="8" fill="#18212c" stroke="#34445a"/><text x="230" y="44" fill="#e6edf3">陀螺一階低通</text><text x="230" y="63" fill="#8d9bab" font-size="11">α = 0.15</text>
+        <rect x="160" y="108" width="140" height="56" rx="8" fill="#18212c" stroke="#34445a"/><text x="230" y="132" fill="#e6edf3">加速度 Kalman</text><text x="230" y="151" fill="#8d9bab" font-size="11">Q 0.001 · R 0.534</text>
+        <rect x="330" y="60" width="120" height="64" rx="8" fill="#18212c" stroke="#34445a"/><text x="390" y="88" fill="#e6edf3">FusionRemap</text><text x="390" y="108" fill="#8d9bab" font-size="11">PXPYPZ（不換軸）</text>
+        <rect x="480" y="60" width="120" height="64" rx="8" fill="#18212c" stroke="#34445a"/><text x="540" y="88" fill="#e6edf3">FusionBias</text><text x="540" y="108" fill="#8d9bab" font-size="11">靜止時追蹤零偏</text>
+        <rect x="630" y="60" width="130" height="64" rx="8" fill="#18212c" stroke="#3987e5"/><text x="695" y="88" fill="#e6edf3">Fusion AHRS</text><text x="695" y="108" fill="#8d9bab" font-size="11">gain 0.5 · 無磁力計</text>
+        <rect x="790" y="60" width="100" height="64" rx="8" fill="#18212c" stroke="#199e70"/><text x="840" y="88" fill="#e6edf3">歐拉角</text><text x="840" y="108" fill="#8d9bab" font-size="11">→ 角度外環</text>
+        <rect x="630" y="166" width="260" height="46" rx="8" fill="#18212c" stroke="#199e70"/><text x="760" y="194" fill="#e6edf3">body_rate（°/s）→ 角速度內環</text>
+      </g>
+      <g stroke="#c2ccd6" stroke-width="1.6" fill="none" marker-end="url(#a3)">
+        <path d="M130 80 H145 V48 H158"/><path d="M130 104 H145 V136 H158"/>
+        <path d="M300 48 H315 V80 H328"/><path d="M300 136 H315 V104 H328"/>
+        <path d="M450 92 H478"/><path d="M600 92 H628"/><path d="M760 92 H788"/>
+        <path d="M614 92 V189 H628"/>
+      </g>
+    </svg>
+    <figcaption>依 <span class="src" data-src="Core/Src/flight.c:190-263"></span> 繪製。加速度不經 FusionBias；陀螺經 Bias 後的值同時供 AHRS 與 PID 使用（<code>body_rate</code>，<span class="src" data-src="Core/Src/flight.c:85-87"></span>）。</figcaption>
+  </figure>
+
+  <h2 id="prefilter"><span class="sec-num">3.2</span>前處理濾波</h2>
+  <div class="grid two">
+    <div class="card">
+      <h3>陀螺：一階低通</h3>
+      <div class="formula">y[k] = 0.15·x[k] + 0.85·y[k−1]</div>
+      <p><span class="tag derived">推算</span> 以 dt = 6 ms 換算：截止頻率 f<sub>c</sub> = −ln(0.85) / (2π·0.006) ≈ <b>4.3 Hz</b>。在 4 Hz 時增益 0.73、相位落後約 <b>39°</b>。</p>
+      <div class="sources"><span class="src" data-src="Core/Src/com_filter.c:3-15"></span><span class="src" data-src="Core/Src/flight.c:204-217"></span></div>
+    </div>
+    <div class="card">
+      <h3>加速度：純量 Kalman（每軸獨立）</h3>
+      <div class="formula">P⁻ = P + Q；K = P⁻/(P⁻+R)；x̂ += K(z − x̂)</div>
+      <p><span class="tag derived">推算</span> Q = 0.001、R = 0.534 時穩態增益 K ≈ 0.042，相當於 α ≈ 0.042 的指數平均，截止約 <b>1.1 Hz</b>。加速度只用來提供重力方向，較重的平滑影響的是傾角修正速度。</p>
+      <div class="sources"><span class="src" data-src="Core/Src/com_filter.c:18-38"></span><span class="src" data-src="Core/Inc/com_filter.h:8-17"></span></div>
+    </div>
+  </div>
+
+  <h2 id="fusion"><span class="sec-num">3.3</span>Fusion AHRS 設定與原理</h2>
+  <p>Fusion 是互補濾波器形式的 AHRS：以陀螺儀角速度積分四元數，並把「量到的重力方向」與「估計的重力方向」之間的誤差，乘上增益後加回角速度。</p>
+  <div class="formula">ω' = ω + gain · e<sub>acc</sub>          （e<sub>acc</sub>：加速度與估計重力的叉積誤差）
+q ← normalize( q + ½ · q ⊗ (0, ω') · dt )</div>
+  <div class="sources"><span>依據</span><span class="src" data-src="Middlewares/Third_Party/Fusion/FusionAhrs.c:155-175"></span><span class="src" data-src="Middlewares/Third_Party/Fusion/FusionAhrs.c:433-440"></span></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>參數</th><th>值</th><th>意義</th></tr></thead>
+    <tbody>
+      <tr><td><code>sampleRate</code></td><td class="mono">166.7 Hz</td><td>由任務週期換算（1000 / 6）</td></tr>
+      <tr><td><code>convention</code></td><td>NWU</td><td>X 北 / 前、Y 西 / 左、Z 上</td></tr>
+      <tr><td><code>gain</code></td><td class="mono">0.5</td><td>加速度修正權重；開機前 3 秒由 10 線性降到 0.5（Fusion startup）</td></tr>
+      <tr><td><code>gyroscopeRange</code></td><td class="mono">2000 °/s</td><td>任一軸超出量程時軟重啟（保留目前姿態，重新進入 startup 高增益階段）</td></tr>
+      <tr><td><code>accelerationRejection</code></td><td class="mono">10°</td><td>加速度與重力方向差超過 10° 時暫停加速度修正（避免機動時誤修正）</td></tr>
+      <tr><td><code>rejectionTimeout</code></td><td class="mono">5 s</td><td>加速度被拒絕累積超過約 5 秒時進入 recovery，強制恢復使用加速度修正，避免姿態長期只靠陀螺積分</td></tr>
+      <tr><td>Bias <code>stationaryThreshold</code> / <code>Period</code></td><td class="mono">3 °/s / 3 s</td><td>角速度低於 3 °/s 持續 3 秒才更新零偏估計</td></tr>
+    </tbody>
+  </table></div>
+  <div class="sources"><span>依據</span><span class="src" data-src="Core/Src/flight.c:13-18"></span><span class="src" data-src="Core/Src/flight.c:151-183"></span><span class="src" data-src="Middlewares/Third_Party/Fusion/FusionAhrs.c:20-26"></span><span class="src" data-src="Middlewares/Third_Party/Fusion/FusionAhrs.c:180-266"></span></div>
+
+  <h2 id="model"><span class="sec-num">3.4</span>互動：3D 姿態模型</h2>
+  <div class="sim-banner"><b>◇ 示意模型</b>　拉桿輸入的是假設姿態，用來說明座標與旋轉；只有按下「播放實測 Roll」時才是真實遙測資料（只含 Roll 軸）。</div>
+  <div class="panel">
+    <div class="attitude-wrap">
+      <div><canvas id="att-canvas" class="attitude-canvas" aria-label="可旋轉的四旋翼 3D 模型，顯示機體座標軸與馬達位置"></canvas>
+        <p class="small muted" id="att-status" style="margin:6px 0 0">藍色機臂為機頭方向；↺ CCW、↻ CW 為俯視旋向。</p></div>
+      <div class="control-stack">
+        <div class="control"><label for="att-roll">Roll（繞 X）</label><input type="range" id="att-roll" min="-90" max="90" step="0.5" value="0"><output id="att-roll-out">0°</output></div>
+        <div class="control"><label for="att-pitch">Pitch（繞 Y）</label><input type="range" id="att-pitch" min="-90" max="90" step="0.5" value="0"><output id="att-pitch-out">0°</output></div>
+        <div class="control"><label for="att-yaw">Yaw（繞 Z）</label><input type="range" id="att-yaw" min="-180" max="180" step="1" value="0"><output id="att-yaw-out">0°</output></div>
+        <div class="controls" style="margin:0">
+          <button id="att-reset">歸零</button>
+          <button data-att-preset="20,0,0">+20° Roll</button>
+          <button data-att-preset="0,20,0">+20° Pitch</button>
+          <button data-att-preset="0,0,45">+45° Yaw</button>
+          <button data-att-preset="10,88,30">萬向鎖附近</button>
+        </div>
+        <div class="controls" style="margin:0">
+          <button id="att-play" class="primary" aria-pressed="false" data-csv="data/run-p-2.3.csv" data-start="9.5" data-end="15">▶ 播放實測 Roll</button>
+          <span class="small muted">run-p-2.3.csv，t = 9.5–15 s（含 11.8 s 擾動事件）</span>
+        </div>
+        <div id="att-readout" class="readout" aria-live="polite"></div>
+      </div>
+    </div>
+  </div>
+  <p class="small muted">實作：<a href="assets/js/attitude.js">attitude.js</a>。四元數依 ZYX（先 Yaw、再 Pitch、最後 Roll）組合；反算使用與 Fusion 相同的公式，可驗證兩者一致。</p>
+
+  <h2 id="euler"><span class="sec-num">3.5</span>四元數轉歐拉角（Fusion 公式）</h2>
+  <div class="formula">roll  = atan2( y·z + w·x , w² + z² − ½ )
+pitch = asin ( 2·(w·y − x·z) )
+yaw   = atan2( x·y + w·z , w² + x² − ½ )</div>
+  <div class="sources"><span>依據</span><span class="src" data-src="Middlewares/Third_Party/Fusion/FusionMath.h:548-559"></span><span class="src" data-src="Core/Src/flight.c:255-260"></span></div>
+  <p>用四元數做積分可以避免歐拉角在 pitch = ±90° 時的萬向鎖；只有輸出給 PID 時才轉成歐拉角。四旋翼正常飛行時 Roll / Pitch 在 ±10° 設定範圍內（搖桿映射，見<a href="control.html">控制</a>），遠離奇異點。</p>
+
+  <h2 id="signs"><span class="sec-num">3.6</span>符號約定（NWU、右手定則）</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>角度</th><th>旋轉軸</th><th>正值代表</th></tr></thead>
+    <tbody>
+      <tr><td>Roll</td><td>+X（機頭）</td><td>左側抬起、<b>右側下沉</b></td></tr>
+      <tr><td>Pitch</td><td>+Y（左）</td><td><b>機頭向下</b></td></tr>
+      <tr><td>Yaw</td><td>+Z（上）</td><td>俯視<b>逆時針</b>轉（機頭往左）</td></tr>
+    </tbody>
+  </table></div>
+  <p class="notice"><span class="tag derived">推算</span> 由右手定則與 NWU 定義推得，可用上方 3D 模型的預設按鈕驗證。<code>sensor_alignment = FusionRemapAlignmentPXPYPZ</code> 表示 IMU 軸被假設與機體軸完全一致，安裝方向必須配合 <span class="src" data-src="Core/Src/flight.c:22-27"></span>。</p>
+
+  <h2 id="limits"><span class="sec-num">3.7</span>限制與觀察</h2>
+  <ul class="tight">
+    <li>無磁力計：Yaw 開機時歸零（startup 期間 <code>FusionAhrsSetHeading(0)</code>），之後只靠陀螺積分，會隨時間漂移；目前控制只用 Yaw 角速度，不受影響。</li>
+    <li>IMU 讀取失敗時保留上一筆姿態直接返回 <span class="src" data-src="Core/Src/flight.c:197-201"></span>，PID 仍以舊值計算。</li>
+    <li>PID 使用的角速度經過 4.3 Hz 低通；Fusion 內部也使用同一個濾波後的角速度積分姿態，所以兩個迴路都承受這段相位落後。</li>
+    <li>感測器約 500 Hz 更新，但每 6 ms 只讀一次，未在讀取前做抗混疊；高頻振動可能折疊進低頻（見<a href="research.html#filter">研究延伸</a>）。</li>
+  </ul>
+
+  <nav class="pager" aria-label="章節切換">
+    <a class="prev" href="software.html"><span class="dir">← 上一頁</span>02 軟體架構</a>
+    <a class="next" href="control.html"><span class="dir">下一頁 →</span>04 控制系統</a>
+  </nav>
+</main>
+</div>
+
+<!-- layout:footer -->
+<footer class="site-footer"><div class="inner">
+  <div class="legend-tags">標記說明：
+    <span class="tag measured">實測</span>實驗資料或實拍
+    <span class="tag derived">推算</span>由程式碼或資料計算
+    <span class="tag sim">模擬</span>假設模型的示意結果
+    <span class="tag code">程式碼</span>原始碼設定值
+    <span class="tag missing">待補</span>尚無資料
+  </div>
+  <div>技術內容依韌體 commit <code>2040300</code>；<span class="mono">⌗</span> 標記可連到 GitHub 對應行號。原始碼：<a href="https://github.com/ZHANG-XICHANG/stm32f103-flight-controller" target="_blank" rel="noopener">ZHANG-XICHANG/stm32f103-flight-controller</a></div>
+</div></footer>
+<!-- /layout:footer -->
+<script src="assets/js/site.js"></script>
+<script src="assets/js/attitude.js"></script>
+</body>
+</html>

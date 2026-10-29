@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>研究延伸 · STM32F103 四旋翼飛控</title>
+<meta name="description" content="由實驗結果延伸的研究方向：控制器改善、濾波設計、系統識別與量測方法。">
+<meta name="theme-color" content="#0b1016">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/css/site.css">
+</head>
+<body>
+<!-- layout:header -->
+<header class="site-header"><div class="inner">
+  <a class="brand" href="index.html">STM32F103 四旋翼飛控</a>
+  <nav class="primary-nav" aria-label="章節"><ul>
+    <li><a href="index.html">首頁</a></li>
+    <li><a href="hardware.html"><span class="num">01</span>硬體</a></li>
+    <li><a href="software.html"><span class="num">02</span>軟體</a></li>
+    <li><a href="ahrs.html"><span class="num">03</span>AHRS</a></li>
+    <li><a href="control.html"><span class="num">04</span>控制</a></li>
+    <li><a href="comm.html"><span class="num">05</span>通訊</a></li>
+    <li><a href="experiments.html"><span class="num">06</span>實驗</a></li>
+    <li><a href="research.html" aria-current="page"><span class="num">07</span>研究延伸</a></li>
+    <li><a href="architecture/">架構圖</a></li>
+  </ul></nav>
+</div></header>
+<!-- /layout:header -->
+
+<div class="page has-toc">
+<aside class="toc"><div class="toc-inner"><details open><summary>本頁目錄</summary><h2>本頁目錄</h2><ol>
+  <li><a href="#questions">研究問題</a></li>
+  <li><a href="#controller">控制器改善</a></li>
+  <li><a href="#filter">濾波與取樣</a></li>
+  <li><a href="#sysid">系統識別</a></li>
+  <li><a href="#measure">量測與驗證</a></li>
+  <li><a href="#safety">安全機制</a></li>
+  <li><a href="#plan">分階段規劃</a></li>
+</ol></details></div></aside>
+
+<main>
+  <div class="page-head">
+    <div class="eyebrow">07 · Future work</div>
+    <h1>研究延伸</h1>
+    <p class="lead">本頁是<b>尚未實作的規劃</b>，每一項都從前面章節觀察到的現象出發，並寫明要怎麼驗證。目的是把「調到能飛」推進到「能說明為什麼這樣調、極限在哪裡」。</p>
+  </div>
+
+  <div class="tldr"><h2>本頁重點</h2><ul>
+    <li>核心問題：在 72 MHz、無 FPU 的 MCU 上，<b>濾波延遲與控制頻寬</b>如何取捨？</li>
+    <li>先做系統識別取得機體模型，再以模型設計濾波與增益，最後用同一套實驗指標比較改善前後。</li>
+    <li>所有提案都附驗證方法；沒有實驗數據前不宣稱改善效果。</li>
+  </ul></div>
+
+  <h2 id="questions"><span class="sec-num">7.1</span>由現有結果引出的研究問題</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>觀察（出處）</th><th>研究問題</th></tr></thead>
+    <tbody>
+      <tr><td>擾動後角速度振盪 3.7–4.5 Hz，與陀螺低通截止頻率相近（<a href="experiments.html#oscillation">06</a>）</td><td>內環的相位裕度由哪些延遲組成？放寬濾波能換回多少頻寬？</td></tr>
+      <tr><td>IMU 約 500 Hz 更新、只以 166.7 Hz 讀取（<a href="hardware.html#imu">01</a>）</td><td>提高取樣率與抗混疊，能否在不增加雜訊的前提下降低延遲？</td></tr>
+      <tr><td>Ki = 0、無抗飽和、限幅後無回饋（<a href="control.html#limits">04</a>）</td><td>加入積分與抗飽和後，穩態誤差與大擾動恢復能改善多少？</td></tr>
+      <tr><td>早期記錄增益與最終參數差異大，缺少條件紀錄（<a href="experiments.html#runs">06</a>）</td><td>能否建立可重複的實驗流程，用量化指標取代目視調參？</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2 id="controller"><span class="sec-num">7.2</span>控制器改善</h2>
+  <div class="grid two">
+    <div class="card"><h3>積分抗飽和與輸出限幅</h3><p>在 <code>PID_calc</code> 加入輸出限幅、積分限幅與條件積分（clamping）或 back-calculation；停機時重置積分。</p><p class="small muted">驗證：穩態偏差（例如重心偏移）下比較 Ki = 0 與 Ki &gt; 0 的角度誤差與恢復時間。</p></div>
+    <div class="card"><h3>混控飽和處理</h3><p>修正量超出 1100–1940 µs 時，優先保留姿態力矩、犧牲總推力（airmode / desaturation），並把飽和狀態回饋給積分器。</p><p class="small muted">驗證：高油門 + 擾動時記錄四路 PWM 是否觸頂與角度誤差。</p></div>
+    <div class="card"><h3>設定值整形與前饋</h3><p>搖桿目標加斜率限制或二階整形；外環 D 改為量測微分；可加入角速度前饋縮短反應時間。</p><p class="small muted">驗證：搖桿步階的過衝、上升時間與 D 項尖峰大小。</p></div>
+    <div class="card"><h3>增益排程</h3><p>推力約與轉速平方成正比，ESC 指令與推力也非線性；不同油門下等效增益不同，可依油門調整內環增益。</p><p class="small muted">驗證：先在推力台量「PWM → 推力」曲線，再比較不同油門下的振盪頻率。</p></div>
+    <div class="card"><h3>Yaw 航向保持</h3><p><code>yaw_pid</code> 已存在但未接入；需定義目標航向、±180° 誤差環繞處理，且無磁力計時航向會漂移。</p><p class="small muted">驗證：靜止 60 秒航向漂移量；加入磁力計前後比較。</p></div>
+    <div class="card"><h3>進階控制器比較</h3><p>以識別出的模型設計 LQR、ADRC 或 INDI（增量非線性動態反轉，對模型誤差較不敏感），與 PID 在相同指標下比較。</p><p class="small muted">前提：先完成 7.4 系統識別；須評估 STM32F103 無 FPU 下的計算時間。</p></div>
+  </div>
+
+  <h2 id="filter"><span class="sec-num">7.3</span>濾波與取樣</h2>
+  <ul class="tight">
+    <li><b>量化現有延遲</b>：陀螺一階低通在 4 Hz 落後約 39°（<span class="tag derived">推算</span>）；再加上 D 項 10 Hz 低通、一個控制週期與馬達反應時間，建立內環的「延遲預算」。</li>
+    <li><b>更高取樣率</b>：利用 MPU6050 的 1 kHz 輸出（DLPF 設定配合）與 FIFO 或 DMA 讀取，內環以 500 Hz–1 kHz 執行，外環與 AHRS 可維持較低頻率。</li>
+    <li><b>更好的濾波器</b>：二階 Butterworth / biquad 取代一階低通，在同樣雜訊抑制下相位落後更小；針對馬達轉速頻率加陷波濾波（可由 FFT 動態追蹤）。</li>
+    <li><b>AHRS 與控制分開濾波</b>：AHRS 積分可以用較輕的濾波，D 項另外使用較重的濾波，避免單一濾波器同時影響兩者。</li>
+    <li><b>驗證方式</b>：記錄未濾波陀螺的頻譜（需在遙測中增加欄位或板上高速記錄），找出馬達振動頻率；比較不同濾波的雜訊 RMS 與內環振盪頻率。</li>
+  </ul>
+
+  <h2 id="sysid"><span class="sec-num">7.4</span>系統識別</h2>
+  <p>現有的<a href="control.html#sim">示意模擬</a>使用假設參數。要讓模擬有預測力，需要識別實機模型：</p>
+  <ol class="tight">
+    <li><b>實驗平台</b>：使用現有單軸測試架（<a href="index.html#results">照片</a>），固定一軸只量 Roll。</li>
+    <li><b>激勵訊號</b>：在內環輸出疊加 chirp（例如 0.5–20 Hz）或 PRBS，振幅小到不觸發限幅；遙測已能回傳修正量與角速度。</li>
+    <li><b>模型結構</b>：以 <code>ω̇ = b·u(t − τ_d)</code> 加一階馬達延遲 τ<sub>m</sub> 為起點，用頻率響應或 ARX / 輸出誤差法估計 b、τ<sub>m</sub>、τ<sub>d</sub>。</li>
+    <li><b>交叉驗證</b>：用另一段記錄（例如擾動事件）比對模型預測與實測，回填到模擬器取代假設參數。</li>
+    <li><b>輔助量測</b>：推力台量測 PWM → 推力與馬達時間常數；轉動慣量可由擺錘法量測。</li>
+  </ol>
+  <p class="notice">限制：遙測經 ACK 回傳，覆蓋率 84–100%，且只有「最新快照」；識別實驗最好在飛控板上以 RAM 緩衝完整 166.7 Hz（或更高）資料，事後再傳回。</p>
+
+  <h2 id="measure"><span class="sec-num">7.5</span>量測與驗證方法</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>要量的東西</th><th>方法</th><th>目前狀態</th></tr></thead>
+    <tbody>
+      <tr><td>任務執行時間 / CPU 負載</td><td>DWT 週期計數器，或任務進出時翻轉 GPIO 用示波器量</td><td><span class="tag missing">未量測</span></td></tr>
+      <tr><td>控制週期穩定度</td><td>遙測 time_ms 間隔（已做，1 ms 解析度）；需要更細可用 DWT</td><td><span class="tag measured">已有</span> 34,772 組全為 6 ms</td></tr>
+      <tr><td>無線封包遺失率</td><td>遙控器端統計 ACK 失敗次數；控制封包加序號</td><td><span class="tag missing">未量測</span></td></tr>
+      <tr><td>失聯保護反應時間</td><td>關閉遙控器並記錄馬達訊號停止時間</td><td><span class="tag missing">未量測</span>（推算約 1.0 s）</td></tr>
+      <tr><td>姿態估測誤差</td><td>與傾角儀或光學追蹤比對；靜態傾斜固定角度</td><td><span class="tag missing">未量測</span></td></tr>
+      <tr><td>步階 / 擾動響應指標</td><td>固定擾動方式，計算過衝、振盪頻率、衰減比、穩定時間</td><td>僅有截圖與早期 CSV</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2 id="safety"><span class="sec-num">7.6</span>安全機制強化</h2>
+  <ul class="tight">
+    <li>FAIL 恢復連線後要求重新解鎖，且油門須先回到最低。</li>
+    <li>IMU 校準失敗或連續讀取失敗時禁止解鎖 / 進入停機。</li>
+    <li>加入獨立看門狗（IWDG），任務停滯時 MCU 重置並輸出停機脈寬。</li>
+    <li><code>remoteData</code> 改為整包快照，避免讀到一半新、一半舊的搖桿值。</li>
+    <li>控制封包加入序號，區分「收到舊封包」與「收到新封包」。</li>
+  </ul>
+
+  <h2 id="plan"><span class="sec-num">7.7</span>分階段規劃</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>階段</th><th>工作</th><th>產出 / 指標</th></tr></thead>
+    <tbody>
+      <tr><td>1 · 量測基礎</td><td>補記錄條件、目前增益的三軸 CSV、執行時間與封包遺失量測</td><td>可重複的實驗流程；基準指標表</td></tr>
+      <tr><td>2 · 系統識別</td><td>測試架 chirp 實驗、推力台量測、模型擬合與交叉驗證</td><td>Roll / Pitch 模型參數與誤差；可預測的模擬器</td></tr>
+      <tr><td>3 · 濾波與取樣</td><td>提高內環頻率、二階濾波 / 陷波，量化延遲預算</td><td>相同雜訊下的相位落後、可用最大內環增益</td></tr>
+      <tr><td>4 · 控制器</td><td>抗飽和、前饋、增益排程；與 LQR / INDI 比較</td><td>過衝、穩定時間、擾動恢復的前後對照</td></tr>
+      <tr><td>5 · 實飛驗證</td><td>戶外懸停與擾動測試，同步錄影與遙測</td><td>實飛資料集與影片時間對照</td></tr>
+    </tbody>
+  </table></div>
+
+  <nav class="pager" aria-label="章節切換">
+    <a class="prev" href="experiments.html"><span class="dir">← 上一頁</span>06 實驗與分析</a>
+    <a class="next" href="architecture/"><span class="dir">延伸閱讀 →</span>互動架構圖</a>
+  </nav>
+</main>
+</div>
+
+<!-- layout:footer -->
+<footer class="site-footer"><div class="inner">
+  <div class="legend-tags">標記說明：
+    <span class="tag measured">實測</span>實驗資料或實拍
+    <span class="tag derived">推算</span>由程式碼或資料計算
+    <span class="tag sim">模擬</span>假設模型的示意結果
+    <span class="tag code">程式碼</span>原始碼設定值
+    <span class="tag missing">待補</span>尚無資料
+  </div>
+  <div>技術內容依韌體 commit <code>2040300</code>；<span class="mono">⌗</span> 標記可連到 GitHub 對應行號。原始碼：<a href="https://github.com/ZHANG-XICHANG/stm32f103-flight-controller" target="_blank" rel="noopener">ZHANG-XICHANG/stm32f103-flight-controller</a></div>
+</div></footer>
+<!-- /layout:footer -->
+<script src="assets/js/site.js"></script>
+</body>
+</html>

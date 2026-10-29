@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>實驗與分析 · STM32F103 四旋翼飛控</title>
+<meta name="description" content="真實遙測 CSV 檢視器、擾動響應、約 4 Hz 角速度振盪分析與調參紀錄。">
+<meta name="theme-color" content="#0b1016">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/css/site.css">
+</head>
+<body>
+<!-- layout:header -->
+<header class="site-header"><div class="inner">
+  <a class="brand" href="index.html">STM32F103 四旋翼飛控</a>
+  <nav class="primary-nav" aria-label="章節"><ul>
+    <li><a href="index.html">首頁</a></li>
+    <li><a href="hardware.html"><span class="num">01</span>硬體</a></li>
+    <li><a href="software.html"><span class="num">02</span>軟體</a></li>
+    <li><a href="ahrs.html"><span class="num">03</span>AHRS</a></li>
+    <li><a href="control.html"><span class="num">04</span>控制</a></li>
+    <li><a href="comm.html"><span class="num">05</span>通訊</a></li>
+    <li><a href="experiments.html" aria-current="page"><span class="num">06</span>實驗</a></li>
+    <li><a href="research.html"><span class="num">07</span>研究延伸</a></li>
+    <li><a href="architecture/">架構圖</a></li>
+  </ul></nav>
+</div></header>
+<!-- /layout:header -->
+
+<div class="page has-toc">
+<aside class="toc"><div class="toc-inner"><details open><summary>本頁目錄</summary><h2>本頁目錄</h2><ol>
+  <li><a href="#source">資料來源</a></li>
+  <li><a href="#viewer">資料檢視器</a></li>
+  <li><a href="#runs">各次記錄摘要</a></li>
+  <li><a href="#oscillation">4 Hz 振盪分析</a></li>
+  <li><a href="#tuning">調參紀錄</a></li>
+  <li><a href="#improve">改善方向</a></li>
+  <li><a href="#missing">缺少的資料</a></li>
+  <li><a href="#local">本機預覽</a></li>
+</ol></details></div></aside>
+
+<main>
+  <div class="page-head">
+    <div class="eyebrow">06 · Experiments</div>
+    <h1>實驗資料與分析</h1>
+    <p class="lead">本頁所有曲線都來自實際錄下的遙測 CSV（2026-09-21 / 22，測試架調參階段）。資料只記錄 X 軸（Roll）；統計與頻譜在瀏覽器中直接由原始資料計算。</p>
+  </div>
+
+  <div class="tldr"><h2>本頁重點</h2><ul>
+    <li><span class="tag measured">實測</span> 擾動後的角速度振盪主頻集中在 <b>3.7–4.5 Hz</b>，與陀螺低通的截止頻率（約 4.3 Hz）同一個量級。</li>
+    <li><span class="tag measured">實測</span> 調參截圖顯示：內環 Kp 5 時振盪發散；Kd 0.5 時出現短暫劇烈振盪。</li>
+    <li><span class="tag derived">推算</span> 這些記錄的增益（外環 ≈ 3、內環 ≈ 2.3–2.5）與目前原始碼（7 / 0.5）不同，屬於<b>早期調參階段</b>；最終實飛參數沒有對應的 CSV。</li>
+  </ul></div>
+
+  <h2 id="source"><span class="sec-num">6.1</span>資料來源與記錄方式</h2>
+  <ul class="tight">
+    <li>飛控每 6 ms 擷取一筆遙測快照（所選軸的角度、目標/量測角速度、誤差、P/D/總輸出、四路 PWM），經 ACK Payload → 遙控器 USB → <code>serial_scope.py</code> / <code>pid_tune.py</code> 存成 CSV。</li>
+    <li>時間軸 <code>flight_elapsed_s</code> 來自飛控的 <code>time_ms</code>；重複序號（同一快照被送兩次）在檢視器中去除。</li>
+    <li>CSV 中的 <code>gyro_x_*</code> 欄位是 X 軸角速度<b>內環</b>的資料；<code>gyro_x_target</code> 即外環輸出。</li>
+    <li>原始檔在專案根目錄（被 <code>.gitignore</code> 排除）；本站在 <code>docs/data/</code> 放了未修改內容的副本並改名，避免被同一規則忽略。</li>
+  </ul>
+  <div class="sources"><span>依據</span><span class="src" data-src="Core/Src/flight.c:452-463"></span><span class="src" data-src="docs/telemetry.md"></span><span class="src" data-src="serial_scope.py"></span></div>
+
+  <h2 id="viewer"><span class="sec-num">6.2</span>互動：遙測資料檢視器</h2>
+  <div class="measured-banner"><b>● 實測資料</b>　曲線為原始 CSV 數值（只去除重複序號）。統計中標「推算」的項目是由資料計算的估計值。</div>
+  <div class="panel">
+    <div class="controls">
+      <label for="run-select">記錄</label><select id="run-select"></select>
+      <label for="win-len">視窗</label>
+      <select id="win-len"><option value="0">全部</option><option value="20">20 s</option><option value="10">10 s</option><option value="5">5 s</option><option value="2">2 s</option></select>
+      <button id="win-all">顯示全部</button>
+    </div>
+    <div class="controls" id="event-buttons" style="margin-top:0"></div>
+    <div class="control" style="margin-bottom:8px"><label for="win-pos">捲動</label><input type="range" id="win-pos" min="0" max="0" step="0.01" value="0"><output id="win-info" class="small" style="min-width:0;text-align:left"></output></div>
+    <p id="viewer-status" class="small muted" style="margin:0 0 4px">載入中…</p>
+    <p id="run-note" class="small" style="margin:0 0 8px"></p>
+    <div id="viewer-plots"></div>
+    <p class="small muted" style="margin:8px 0 0">桌機：在圖上拖曳框選放大、雙擊還原；手機：用「視窗」與「捲動」控制範圍，點一下圖表顯示數值。</p>
+    <h3 style="margin-top:18px">本次記錄的統計</h3>
+    <div class="table-wrap"><table><thead><tr><th>項目</th><th class="num">值</th><th>性質</th></tr></thead><tbody id="run-stats"></tbody></table></div>
+    <div id="spectrum"></div>
+    <p class="small muted" style="margin:6px 0 0">頻譜做法：依序號重建 6 ms 等間隔序列（缺口線性內插），去平均、加 Hann 窗後做 FFT。</p>
+  </div>
+
+  <h2 id="runs"><span class="sec-num">6.3</span>各次記錄摘要</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>記錄（原始檔名）</th><th class="num">長度</th><th class="num">序號覆蓋</th><th class="num">外環 Kp<br>推算</th><th class="num">內環 Kp<br>推算</th><th class="num">角速度頻譜峰<br>（2–10 Hz）</th><th>備註</th></tr></thead>
+    <tbody>
+      <tr><td><code>telemetry_p_2.3.csv</code></td><td class="num">21.1 s</td><td class="num">84.0%</td><td class="num">3.00</td><td class="num">2.25</td><td class="num">3.95 Hz</td><td>11.8 s 擾動後衰減振盪</td></tr>
+      <tr><td><code>telemetry_p_2.33.csv</code></td><td class="num">63.8 s</td><td class="num">93.2%</td><td class="num">2.14*</td><td class="num">2.28</td><td class="num">3.57 Hz*</td><td>大角度擺動（−40° ~ +15°）</td></tr>
+      <tr><td><code>telemetry_D_0.12.csv</code></td><td class="num">43.2 s</td><td class="num">100%</td><td class="num">3.00</td><td class="num">2.50</td><td class="num">3.72 Hz*</td><td>開始時 roll ≈ −69°</td></tr>
+      <tr><td><code>telemetry_D_0.13.csv</code></td><td class="num">33.2 s</td><td class="num">87.1%</td><td class="num">2.98</td><td class="num">2.46</td><td class="num">3.74 Hz</td><td>穩態 + 16.6 s 擾動</td></tr>
+      <tr><td><code>telemetry_new.csv</code></td><td class="num">84.1 s</td><td class="num">92.3%</td><td class="num">2.99</td><td class="num">—</td><td class="num">4.45 Hz</td><td>無 P 項欄位</td></tr>
+      <tr><td><code>telemetry.csv</code>（舊格式）</td><td class="num">83.5 s</td><td class="num">96.0%</td><td class="num">—</td><td class="num">3.0†</td><td class="num">—</td><td>電腦接收時間軸</td></tr>
+    </tbody>
+  </table></div>
+  <p class="small muted"><span class="tag derived">推算</span> 外環 Kp：以最小平方擬合「目標角速度 ≈ −k × roll 角 + c」（搖桿置中時外環 desire ≈ 0）。內環 Kp：P 項 ÷ 誤差的中位數（|誤差| &gt; 5 °/s）。* 有大角度擺動或搖桿輸入，外環擬合與全頻段頻譜會受 1 Hz 以下的低頻運動影響（檢視器同時列出全頻段峰值）。† 輸出 ÷ 誤差的中位數。這些記錄沒有存下當時的增益設定，檔名中的 p / D 是記錄者的標註。</p>
+
+  <h2 id="oscillation"><span class="sec-num">6.4</span>約 4 Hz 角速度振盪分析</h2>
+  <div class="grid two">
+    <figure class="frame light" style="margin:0">
+      <img src="assets/img/tuning/outer-3-0-0.01-dlpf.jpg" alt="調參工具截圖：24 秒附近擾動後角速度振盪約 1.5 秒內衰減" width="1600" height="862" loading="lazy">
+      <figcaption><span class="tag measured">實測截圖</span> 資料夾「D低通濾波」、檔名 <code>外環3_0_0.01</code>。24.3 s 擾動後，量測角速度（橘）振盪約 6–7 個週期才衰減，與 <code>telemetry_new.csv</code> 同一事件吻合。</figcaption>
+    </figure>
+    <div>
+      <h3 style="margin-top:0">觀察</h3>
+      <ol class="tight">
+        <li>三份以小角度擾動為主的記錄，角速度頻譜峰都落在 3.7–4.5 Hz（<code>p_2.3</code> 3.95、<code>D_0.13</code> 3.74、<code>new</code> 4.45 Hz）；另外兩份大角度記錄在 2–10 Hz 範圍內的峰值也落在 3.6–3.7 Hz。</li>
+        <li>擾動後的振盪是<b>衰減</b>的，代表內環穩定但阻尼不足。</li>
+        <li>內環 Kp 提高到 5 時振盪逐漸放大直到發散（下方截圖）。</li>
+      </ol>
+      <h3>推論（待驗證）</h3>
+      <p>陀螺一階低通 α = 0.15 在 6 ms 取樣下截止約 4.3 Hz，在 4 Hz 時已落後約 39°。再加上馬達 / 槳的反應延遲、D 項 10 Hz 低通與一個控制週期的計算延遲，內環在 4 Hz 附近的相位裕度很小，提高增益就會在這個頻率附近失穩。<a href="control.html#sim">控制頁的示意模擬</a>可以重現同樣的趨勢，但模擬的機體參數是假設值。</p>
+      <p class="small muted">要確認這個推論，需要做相同條件下只改變陀螺低通截止頻率的對照實驗，或以掃頻量測內環開迴路頻率響應（見<a href="research.html#sysid">研究延伸</a>）。</p>
+    </div>
+  </div>
+  <figure class="frame svgfig">
+    <svg data-wide="sm" viewBox="0 0 640 210" role="img" aria-label="陀螺低通濾波器的增益與相位隨頻率變化">
+      <g font-size="11" fill="#8d9bab" font-family="Consolas, monospace">
+        <text x="60" y="196">0</text><text x="148" y="196">2</text><text x="236" y="196">4</text><text x="324" y="196">6</text><text x="412" y="196">8</text><text x="500" y="196">10 Hz</text>
+        <text x="52" y="24" text-anchor="end">1.0</text><text x="52" y="94" text-anchor="end">0.5</text><text x="52" y="164" text-anchor="end">0</text>
+        <text x="588" y="24">0°</text><text x="588" y="94">−45°</text><text x="588" y="164">−90°</text>
+      </g>
+      <g stroke="#1f2a37"><line x1="60" y1="20" x2="580" y2="20"/><line x1="60" y1="90" x2="580" y2="90"/><line x1="60" y1="160" x2="580" y2="160"/><line x1="236" y1="20" x2="236" y2="160" stroke="#3a4a5e" stroke-dasharray="4 4"/></g>
+      <polyline id="lpf-mag" fill="none" stroke="#3987e5" stroke-width="2"/>
+      <polyline id="lpf-ph" fill="none" stroke="#d95926" stroke-width="2"/>
+      <g font-size="12"><text x="250" y="40" fill="#3987e5">增益</text><text x="380" y="120" fill="#d95926">相位</text><text x="240" y="176" fill="#c2ccd6">4 Hz：增益 0.73、相位 −39°</text></g>
+    </svg>
+    <figcaption><span class="tag derived">推算</span> 由 <code>y[k] = 0.15·x[k] + 0.85·y[k−1]</code>、dt = 6 ms 計算的頻率響應 <span class="src" data-src="Core/Src/com_filter.c:3-15"></span>。</figcaption>
+  </figure>
+
+  <h2 id="tuning"><span class="sec-num">6.5</span>調參紀錄（工具截圖）</h2>
+  <p class="small muted">以下為作者調參時的 <code>serial_scope.py</code> / <code>pid_tune.py</code> 螢幕截圖（未修改，僅縮小）。參數取自原始檔名或資料夾名，格式為 Kp_Ki_Kd；舊版截圖的時間軸為電腦接收時間。</p>
+  <div class="grid two">
+    <figure class="frame light" style="margin:0"><img src="assets/img/tuning/inner-3-0-0.jpg" alt="內環 Kp 3 的角速度響應截圖：擾動後短暫振盪並恢復" width="1600" height="869" loading="lazy">
+      <figcaption><span class="tag measured">截圖</span> 內環 3_0_0（純 P）。12.5 s 附近的擾動後有數次振盪即恢復。</figcaption></figure>
+    <figure class="frame light" style="margin:0"><img src="assets/img/tuning/inner-5-0-0.jpg" alt="內環 Kp 5 的角速度響應截圖：振盪逐漸放大至發散" width="1600" height="866" loading="lazy">
+      <figcaption><span class="tag measured">截圖</span> 內環 5_0_0。約 3 s 起振盪逐週期放大，4.3 s 後超出顯示範圍——增益超過穩定極限。</figcaption></figure>
+    <figure class="frame light" style="margin:0"><img src="assets/img/tuning/inner-3.3-0-0.5-dlpf.jpg" alt="內環 Kd 0.5 時 PID 輸出雜訊大並出現劇烈振盪的截圖" width="1600" height="865" loading="lazy">
+      <figcaption><span class="tag measured">截圖</span> D低通濾波 / 內環 3.3_0_0.5。穩態時輸出已有明顯高頻雜訊，9–11.5 s 出現劇烈振盪，油門拉到 0 後停止。</figcaption></figure>
+    <figure class="frame light" style="margin:0"><img src="assets/img/tuning/outer-7-0-0.05-gui.jpg" alt="pid_tune.py 介面截圖，外環 Kp 7 Kd 0.05 時角度維持在正負 5 度內" width="1600" height="867" loading="lazy">
+      <figcaption><span class="tag measured">截圖</span> 資料夾 內環0.5_0_0.005 / 外環7_0_0.05（新版 GUI，五張圖含四路 PWM）。外環參數與原始碼一致；資料夾名的內環 Kd 為 0.005，原始碼預設為 0.01。roll 維持在約 ±5°，角速度仍有小幅振盪；此階段沒有對應 CSV。</figcaption></figure>
+  </div>
+  <p class="small">另有實際操作的 GUI 截圖：<a href="images/pid-tuning-gui.png">pid-tuning-gui.png</a>；測試架照片見<a href="index.html#results">首頁</a>。</p>
+
+  <h2 id="improve"><span class="sec-num">6.6</span>改善方向（由資料出發）</h2>
+  <ol class="tight">
+    <li><b>放寬或改用更好的陀螺濾波</b>：把 α 提高（例如截止 20–40 Hz），改用二階低通或針對馬達頻率的陷波，降低內環相位落後。</li>
+    <li><b>提高 IMU 讀取率</b>：內環與濾波以 500 Hz–1 kHz 執行，外環維持較低頻率。</li>
+    <li><b>以實驗驗證</b>：每次只改一個參數，固定擾動方式（例如固定角度釋放），用相同指標比較——過衝、振盪頻率、衰減比、穩定時間。</li>
+    <li><b>補齊最終參數的記錄</b>：以目前原始碼增益（7 / 0.5）重錄 Roll、Pitch、Yaw 三軸 CSV，並寫下測試條件。</li>
+  </ol>
+  <p>完整的研究規劃見 <a href="research.html">07 研究延伸</a>。</p>
+
+  <div class="missing-box" id="missing">
+    <h3>缺少的實驗資料</h3>
+    <ul class="tight">
+      <li>以<b>目前原始碼增益</b>（外環 7 / 0.05、內環 0.5 / 0.01）錄下的 CSV；現有 CSV 都是早期增益。</li>
+      <li><b>Pitch（Y）與 Yaw（Z）軸</b>的遙測記錄；目前只有 X 軸。</li>
+      <li>每次記錄的條件說明：測試架或自由飛行、是否裝槳、油門、電池電壓、擾動方式。</li>
+      <li>實飛時的遙測與四路 PWM；影片與資料的時間對照。</li>
+      <li>步階響應（搖桿階躍）記錄，用來量過衝、上升時間與穩定時間。</li>
+      <li>任務執行時間（CPU 負載）與無線封包遺失率的量測。</li>
+      <li>原始影片 <code>飛行測試影片合輯.mp4</code>（約 181 MB）超過 GitHub 單檔 100 MB 上限，本站改連 YouTube。</li>
+    </ul>
+  </div>
+
+  <h2 id="local"><span class="sec-num">6.7</span>本機預覽注意事項</h2>
+  <p>檢視器以 <code>fetch()</code> 讀取 CSV，直接用 <code>file://</code> 開啟 HTML 時瀏覽器會阻擋。請在專案根目錄執行：</p>
+  <pre><code>python -m http.server 8000 --directory docs</code></pre>
+  <p>然後開啟 <a href="http://localhost:8000/experiments.html">http://localhost:8000/experiments.html</a>。發布到 GitHub Pages 後不需要額外設定。</p>
+
+  <nav class="pager" aria-label="章節切換">
+    <a class="prev" href="comm.html"><span class="dir">← 上一頁</span>05 無線通訊</a>
+    <a class="next" href="research.html"><span class="dir">下一頁 →</span>07 研究延伸</a>
+  </nav>
+</main>
+</div>
+
+<!-- layout:footer -->
+<footer class="site-footer"><div class="inner">
+  <div class="legend-tags">標記說明：
+    <span class="tag measured">實測</span>實驗資料或實拍
+    <span class="tag derived">推算</span>由程式碼或資料計算
+    <span class="tag sim">模擬</span>假設模型的示意結果
+    <span class="tag code">程式碼</span>原始碼設定值
+    <span class="tag missing">待補</span>尚無資料
+  </div>
+  <div>技術內容依韌體 commit <code>2040300</code>；<span class="mono">⌗</span> 標記可連到 GitHub 對應行號。原始碼：<a href="https://github.com/ZHANG-XICHANG/stm32f103-flight-controller" target="_blank" rel="noopener">ZHANG-XICHANG/stm32f103-flight-controller</a></div>
+</div></footer>
+<!-- /layout:footer -->
+<script src="assets/js/site.js"></script>
+<script src="assets/js/plot.js"></script>
+<script src="assets/js/viewer.js"></script>
+<script>
+  // 陀螺低通頻率響應（與 com_filter.c 同一公式）
+  (function () {
+    const mag = [], ph = [];
+    for (let f = 0; f <= 11.8; f += 0.1) {
+      const w = 2 * Math.PI * f * 0.006, re = 1 - 0.85 * Math.cos(w), im = 0.85 * Math.sin(w);
+      const g = 0.15 / Math.hypot(re, im), p = -Math.atan2(im, re) * 180 / Math.PI;
+      const x = 60 + f * 44;
+      mag.push(`${x.toFixed(1)},${(160 - g * 140).toFixed(1)}`);
+      ph.push(`${x.toFixed(1)},${(20 + (-p / 90) * 140).toFixed(1)}`);
+    }
+    document.getElementById('lpf-mag').setAttribute('points', mag.join(' '));
+    document.getElementById('lpf-ph').setAttribute('points', ph.join(' '));
+  })();
+</script>
+</body>
+</html>

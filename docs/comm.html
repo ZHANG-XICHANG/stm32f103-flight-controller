@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>無線通訊 · STM32F103 四旋翼飛控</title>
+<meta name="description" content="nRF24L01P 控制封包、24 B 調參指令、31 B ACK Payload 遙測、序號與 1000 ms 失聯保護。">
+<meta name="theme-color" content="#0b1016">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/css/site.css">
+</head>
+<body>
+<!-- layout:header -->
+<header class="site-header"><div class="inner">
+  <a class="brand" href="index.html">STM32F103 四旋翼飛控</a>
+  <nav class="primary-nav" aria-label="章節"><ul>
+    <li><a href="index.html">首頁</a></li>
+    <li><a href="hardware.html"><span class="num">01</span>硬體</a></li>
+    <li><a href="software.html"><span class="num">02</span>軟體</a></li>
+    <li><a href="ahrs.html"><span class="num">03</span>AHRS</a></li>
+    <li><a href="control.html"><span class="num">04</span>控制</a></li>
+    <li><a href="comm.html" aria-current="page"><span class="num">05</span>通訊</a></li>
+    <li><a href="experiments.html"><span class="num">06</span>實驗</a></li>
+    <li><a href="research.html"><span class="num">07</span>研究延伸</a></li>
+    <li><a href="architecture/">架構圖</a></li>
+  </ul></nav>
+</div></header>
+<!-- /layout:header -->
+
+<div class="page has-toc">
+<aside class="toc"><div class="toc-inner"><details open><summary>本頁目錄</summary><h2>本頁目錄</h2><ol>
+  <li><a href="#link">鏈路總覽</a></li>
+  <li><a href="#packets">封包格式</a></li>
+  <li><a href="#ack">ACK Payload 機制</a></li>
+  <li><a href="#sequence">時序圖</a></li>
+  <li><a href="#seqnum">序號與可靠性</a></li>
+  <li><a href="#failsafe">失聯保護</a></li>
+  <li><a href="#timing">空中時間</a></li>
+</ol></details></div></aside>
+
+<main>
+  <div class="page-head">
+    <div class="eyebrow">05 · Wireless link</div>
+    <h1>無線通訊與失聯保護</h1>
+    <p class="lead">飛控端的 nRF24L01P 一直處於接收（PRX）模式。遙控器送來的每一包控制封包，硬體都會自動回 ACK，並夾帶飛控事先排入的資料——遙測或調參結果就這樣「搭便車」回到遙控器，不需要切換收發方向。</p>
+  </div>
+
+  <div class="tldr"><h2>本頁重點</h2><ul>
+    <li>三種格式：17 B 控制封包（上行）、24 B PID / 軸切換指令（上行）、4 / 24 / 31 B ACK Payload（下行）。</li>
+    <li>ACK 內容是「上一輪」預先排入的，所以回傳資料一律落後一包；調參結果需要後續封包帶回。</li>
+    <li>只有通過幀頭與校驗和的控制封包會刷新連線時間；超過 1000 ms 即判定失聯 → FAIL → 停機。</li>
+  </ul></div>
+
+  <h2 id="link"><span class="sec-num">5.1</span>鏈路總覽</h2>
+  <figure class="frame svgfig">
+    <svg data-wide viewBox="0 0 900 200" role="img" aria-label="PC、遙控器、飛控之間的資料路徑">
+      <defs><marker id="c1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c2ccd6"/></marker></defs>
+      <g font-size="14" text-anchor="middle">
+        <rect x="10" y="60" width="170" height="80" rx="10" fill="#18212c" stroke="#34445a"/><text x="95" y="94" fill="#e6edf3">PC</text><text x="95" y="116" fill="#8d9bab" font-size="12">pid_tune.py / serial_scope.py</text>
+        <rect x="330" y="60" width="200" height="80" rx="10" fill="#18212c" stroke="#34445a" stroke-dasharray="6 4"/><text x="430" y="94" fill="#e6edf3">STM32F411 遙控器</text><text x="430" y="116" fill="#8d9bab" font-size="12">PTX · 另一個 repo</text>
+        <rect x="690" y="60" width="200" height="80" rx="10" fill="#18212c" stroke="#3987e5"/><text x="790" y="94" fill="#e6edf3">STM32F103 飛控</text><text x="790" y="116" fill="#8d9bab" font-size="12">nRF24L01P PRX · CH40</text>
+      </g>
+      <g stroke="#c2ccd6" stroke-width="1.6" fill="none" marker-end="url(#c1)">
+        <path d="M180 85 H328"/><path d="M328 115 H182"/><path d="M530 85 H688"/><path d="M688 115 H532"/>
+      </g>
+      <g font-size="12" fill="#8d9bab" text-anchor="middle">
+        <text x="255" y="76">USB：PID,… / AXIS,…</text><text x="255" y="134">USB：TEL,… / PID_*</text>
+        <text x="609" y="76">17 B 控制 · 24 B 指令</text><text x="609" y="134">ACK：4 / 24 / 31 B</text>
+        <text x="609" y="168">2 Mbps · 2 B CRC · ARD 500 µs · ARC 5</text>
+      </g>
+    </svg>
+    <figcaption>遙控器以虛框表示：其韌體不在本 repo，僅能依飛控端解析程式推知它送出的內容。</figcaption>
+  </figure>
+
+  <h2 id="packets"><span class="sec-num">5.2</span>封包格式（皆為大端序）</h2>
+  <h3>控制封包 · 17 B（遙控器 → 飛控）</h3>
+  <div class="bytemap" role="img" aria-label="17 位元組控制封包欄位配置">
+    <div class="f hdr" style="flex:3"><b>0–2</b>AA 55 AA</div>
+    <div class="f data" style="flex:2"><b>3–4</b>油門</div>
+    <div class="f data" style="flex:2"><b>5–6</b>Yaw</div>
+    <div class="f data" style="flex:2"><b>7–8</b>Pitch</div>
+    <div class="f data" style="flex:2"><b>9–10</b>Roll</div>
+    <div class="f" style="flex:1"><b>11</b>定高</div>
+    <div class="f" style="flex:1"><b>12</b>power</div>
+    <div class="f chk" style="flex:4"><b>13–16</b>校驗和 u32</div>
+  </div>
+  <p class="small">搖桿值 0–1000；校驗和為 byte 0–12 的 32 位元累加。<code>power</code> 只在等於 1 時鎖存成事件，由飛控任務讀取後清除。<span class="src" data-src="Core/Src/receive.c:98-140"></span><span class="src" data-src="Core/Inc/receive.h:8-37"></span></p>
+
+  <h3>PID / 軸切換指令 · 24 B（遙控器 → 飛控；結果以同格式回傳）</h3>
+  <div class="bytemap" role="img" aria-label="24 位元組 PID 指令欄位配置">
+    <div class="f hdr" style="flex:2"><b>0–1</b>'P' 'I'</div>
+    <div class="f" style="flex:1"><b>2</b>版本 1</div>
+    <div class="f" style="flex:1"><b>3</b>類型</div>
+    <div class="f" style="flex:4"><b>4–7</b>序號 u32</div>
+    <div class="f" style="flex:1"><b>8</b>ID</div>
+    <div class="f" style="flex:1"><b>9</b>狀態</div>
+    <div class="f data" style="flex:4"><b>10–13</b>Kp×10⁴</div>
+    <div class="f data" style="flex:4"><b>14–17</b>Ki×10⁴</div>
+    <div class="f data" style="flex:4"><b>18–21</b>Kd×10⁴</div>
+    <div class="f chk" style="flex:2"><b>22–23</b>CRC16</div>
+  </div>
+  <p class="small">類型 1 = PID SET、2 = PID 結果、3 = 軸切換、4 = 軸切換結果；ID 0–5 對應 roll / pitch / gyro_x / gyro_y / gyro_z / yaw，軸切換 ID 為 128 + axis。CRC16-CCITT（初值 0xFFFF）。傳輸上限 Kp ≤ 20、Ki ≤ 10、Kd ≤ 2（不代表穩定範圍）。<span class="src" data-src="Core/Inc/pid_wire.h:5-42"></span></p>
+
+  <h3>遙測 ACK Payload · 31 B（飛控 → 遙控器）</h3>
+  <div class="bytemap" role="img" aria-label="31 位元組遙測欄位配置">
+    <div class="f hdr" style="flex:4"><b>0–3</b>序號</div>
+    <div class="f hdr" style="flex:4"><b>4–7</b>time_ms</div>
+    <div class="f data" style="flex:2"><b>8–9</b>角度×100</div>
+    <div class="f data" style="flex:2"><b>10–11</b>目標×10</div>
+    <div class="f data" style="flex:2"><b>12–13</b>角速度×10</div>
+    <div class="f data" style="flex:2"><b>14–15</b>誤差×10</div>
+    <div class="f" style="flex:2"><b>16–17</b>P</div>
+    <div class="f" style="flex:2"><b>18–19</b>D</div>
+    <div class="f" style="flex:2"><b>20–21</b>輸出</div>
+    <div class="f chk" style="flex:8"><b>22–29</b>M1–M4 脈寬 µs</div>
+    <div class="f" style="flex:1"><b>30</b>軸</div>
+  </div>
+  <p class="small">角度、角速度依所選軸（X / Y / Z，預設 X）；四路 PWM 永遠是實際寫入的脈寬。數值超出 int16 會限幅、小數截斷。<span class="src" data-src="Core/Inc/telemetry_wire.h:6-75"></span><span class="src" data-src="Core/Src/telemetry.c:9-52"></span></p>
+  <p class="notice"><code>docs/ack_telemetry.md</code> 描述的是舊版 10 B 格式，已被上面的 31 B 取代，以程式碼為準。</p>
+
+  <h2 id="ack"><span class="sec-num">5.3</span>ACK Payload 機制</h2>
+  <ol class="tight">
+    <li><b>預載</b>：<code>Receive_Init()</code> 在拉高 CE 開始接收之前，先排入一筆 ACK（4 B 序號），第一個控制封包才帶得回資料 <span class="src" data-src="Core/Src/receive.c:41-62"></span>。</li>
+    <li><b>硬體自動回覆</b>：收到封包時，晶片立即送出 ACK 與 TX FIFO 中排在最前面的酬載——這是<b>先前</b>排入的內容。</li>
+    <li><b>補入下一筆</b>：通訊任務輪詢到這包後，馬上呼叫 <code>Receive_QueueAckTelemetry()</code> 排入下一筆（即使應用層校驗失敗，因為硬體已經消耗了一筆 ACK）<span class="src" data-src="Core/Src/receive.c:86-92"></span>。</li>
+    <li><b>內容選擇</b>：還沒有遙測時送 4 B 序號；有遙測快照時送 31 B；序號為奇數且有待回報結果時改送 24 B PID 結果 <span class="src" data-src="Core/Src/receive.c:15-39"></span>。</li>
+    <li><b>TX FIFO 滿</b>（3 筆）時不寫入、也不清空，保留晶片重送所需的內容。</li>
+  </ol>
+
+  <h2 id="sequence"><span class="sec-num">5.4</span>通訊時序圖</h2>
+  <div class="grid two">
+    <figure class="frame light" style="margin:0"><img src="architecture/export/04a-ack-sequence-control.png" alt="ACK 時序：初始化與控制週期" width="3840" height="2160" loading="lazy"><figcaption>① 初始化 ② 控制週期</figcaption></figure>
+    <figure class="frame light" style="margin:0"><img src="architecture/export/04b-ack-sequence-tuning.png" alt="ACK 時序：PID 調參與失聯保護" width="3840" height="2160" loading="lazy"><figcaption>③ PID 調參 ④ 失聯保護</figcaption></figure>
+  </div>
+  <p class="small"><a href="architecture/04-ack-payload-sequence.html" target="_blank" rel="noopener">開啟完整互動時序圖</a>（可點選參與者查看程式碼依據）。</p>
+
+  <h2 id="seqnum"><span class="sec-num">5.5</span>序號與可靠性設計</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>序號</th><th>誰遞增</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td><code>ack_sequence</code></td><td>每成功排入一筆 ACK +1</td><td>4 B 回覆內容；奇偶決定是否插入調參結果 <span class="src" data-src="Core/Src/receive.c:10-13"></span></td></tr>
+      <tr><td>遙測 <code>sequence</code></td><td>飛控每輪擷取 +1（每 6 ms）</td><td>電腦端排序、偵測重複與缺口 <span class="src" data-src="Core/Src/telemetry.c:47-51"></span></td></tr>
+      <tr><td>指令 <code>sequence</code></td><td>電腦端隨機產生</td><td>去重：同序號重送不會再套用或清除積分，只重新安排結果回覆 <span class="src" data-src="Core/Src/pid_command.c:9-20"></span></td></tr>
+    </tbody>
+  </table></div>
+  <ul class="tight">
+    <li><b>結果重送</b>：結果最多排入 8 次（<code>result_budget</code>），與遙測交錯，抵抗 ACK 遺失。</li>
+    <li><b>指令不刷新連線</b>：24 B 指令回傳 <code>RECEIVE_INVALID</code>，所以只送調參指令不能維持連線 <span class="src" data-src="Core/Src/receive.c:93-97"></span>。</li>
+    <li><span class="tag measured">實測</span> 遙測 CSV 中序號覆蓋率 84–100%、重複 0–8%：因為遙測只在有 ACK 時送出「最新」快照，缺口代表兩次 ACK 之間飛控已更新多筆，<b>不能直接當作丟包率</b>（見<a href="experiments.html#runs">實驗 · 資料品質</a>）。</li>
+  </ul>
+
+  <h2 id="failsafe"><span class="sec-num">5.6</span>失聯保護與飛行狀態機</h2>
+  <figure class="frame svgfig">
+    <svg data-wide viewBox="0 0 900 300" role="img" aria-label="飛行狀態機：IDLE、NORMAL、FIX_HEIGHT、FAIL 之間的轉移條件">
+      <defs><marker id="s1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c2ccd6"/></marker>
+        <marker id="s2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#e66767"/></marker></defs>
+      <g font-size="15" text-anchor="middle" font-weight="700">
+        <rect x="40" y="110" width="140" height="64" rx="32" fill="#18212c" stroke="#8d9bab"/><text x="110" y="138" fill="#e6edf3">IDLE</text>
+        <rect x="370" y="110" width="160" height="64" rx="32" fill="#18212c" stroke="#3fbf8a" stroke-width="2"/><text x="450" y="138" fill="#e6edf3">NORMAL</text>
+        <rect x="700" y="20" width="160" height="64" rx="32" fill="#18212c" stroke="#8d9bab" stroke-dasharray="5 4"/><text x="780" y="48" fill="#e6edf3">FIX_HEIGHT</text>
+        <rect x="700" y="200" width="160" height="64" rx="32" fill="#18212c" stroke="#e66767" stroke-width="2"/><text x="780" y="228" fill="#e6edf3">FAIL</text>
+      </g>
+      <g font-size="11.5" text-anchor="middle" fill="#8d9bab">
+        <text x="110" y="160">馬達 1100 µs</text><text x="450" y="160">混控輸出</text><text x="780" y="70">停機（定高未實作）</text><text x="780" y="250">停機 1100 µs</text>
+      </g>
+      <g fill="none" stroke-width="1.6">
+        <path d="M180 128 H368" stroke="#c2ccd6" marker-end="url(#s1)"/>
+        <path d="M368 158 H182" stroke="#c2ccd6" marker-end="url(#s1)"/>
+        <path d="M530 122 C 600 100, 640 60, 698 52" stroke="#c2ccd6" marker-end="url(#s1)"/>
+        <path d="M700 70 C 640 90, 600 118, 532 134" stroke="#c2ccd6" marker-end="url(#s1)"/>
+        <path d="M530 160 C 600 190, 640 220, 698 228" stroke="#e66767" marker-end="url(#s2)"/>
+        <path d="M700 246 C 620 250, 560 210, 512 176" stroke="#3fbf8a" marker-end="url(#s1)"/>
+        <path d="M790 84 V198" stroke="#e66767" marker-end="url(#s2)"/>
+      </g>
+      <g font-size="12" fill="#c2ccd6">
+        <text x="274" y="120" text-anchor="middle">解鎖姿勢 + power=1</text>
+        <text x="274" y="178" text-anchor="middle">power=1</text>
+        <text x="580" y="78" text-anchor="middle">fixheight=1</text>
+        <text x="660" y="126" text-anchor="middle">fixheight=0</text>
+        <text x="575" y="224" text-anchor="middle" fill="#e66767">失聯</text>
+        <text x="620" y="268" text-anchor="middle" fill="#3fbf8a">恢復連線</text>
+        <text x="800" y="146" fill="#e66767">失聯</text>
+      </g>
+    </svg>
+    <figcaption>依 <span class="src" data-src="Core/Src/flight_state.c:72-134"></span> 繪製。解鎖姿勢：油門 &lt; 10、其餘三軸 490–510。FAIL 恢復連線後直接回到 NORMAL，不需重新解鎖。</figcaption>
+  </figure>
+  <div class="grid two">
+    <div class="card"><h3>失聯判定</h3>
+      <p>通訊任務每 6 ms 呼叫 <code>FlightState_Update()</code>：<code>now − last_rx_time &gt; 1000 ms</code> 即設為 <code>LINK_DISCONNECTED</code>；飛控任務下一輪轉為 FAIL 並停機。</p>
+      <p class="small"><span class="tag derived">推算</span> 最後一包有效封包後約 1.00–1.01 s 停機（1000 ms + 最多一個通訊週期 + 一個飛控週期）。</p>
+      <div class="sources"><span class="src" data-src="Core/Src/flight_state.c:28-38"></span><span class="src" data-src="Core/Inc/flight_state.h:8"></span></div></div>
+    <div class="card"><h3>程式審閱觀察</h3>
+      <ul class="tight small">
+        <li>FIX_HEIGHT 分支中「失聯 → FAIL」之後的 <code>fixheight == 0 → NORMAL</code> 沒有 <code>else</code>，兩者同週期成立時會先回 NORMAL、下一週期才進 FAIL（延遲 6 ms，影響很小）<span class="src" data-src="Core/Src/flight_state.c:108-120"></span>。</li>
+        <li>失聯後 <code>remoteData</code> 保留最後的搖桿值；恢復連線即以新值繼續，無油門歸零確認。</li>
+      </ul></div>
+  </div>
+
+  <h2 id="timing"><span class="sec-num">5.7</span>空中時間估算</h2>
+  <p><span class="tag derived">推算</span> 依 nRF24L01+ Enhanced ShockBurst 封包結構（前導 1 B + 位址 5 B + 控制欄 9 bit + 酬載 + CRC 2 B）在 2 Mbps 下計算：</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>封包</th><th class="num">位元數</th><th class="num">空中時間</th></tr></thead>
+    <tbody>
+      <tr><td>17 B 控制封包</td><td class="num">209 bit</td><td class="num">≈ 105 µs</td></tr>
+      <tr><td>24 B PID 指令</td><td class="num">265 bit</td><td class="num">≈ 133 µs</td></tr>
+      <tr><td>ACK + 31 B 遙測</td><td class="num">321 bit</td><td class="num">≈ 161 µs</td></tr>
+    </tbody>
+  </table></div>
+  <p class="small">再加上收發切換約 130 µs，31 B ACK 的完整往返超過 250 µs；這就是 <code>docs/telemetry.md</code> 記錄必須把重送延遲 ARD 從 250 µs 改成 500 µs 的原因 <span class="src" data-src="docs/telemetry.md:6-11"></span>。</p>
+
+  <nav class="pager" aria-label="章節切換">
+    <a class="prev" href="control.html"><span class="dir">← 上一頁</span>04 控制系統</a>
+    <a class="next" href="experiments.html"><span class="dir">下一頁 →</span>06 實驗與分析</a>
+  </nav>
+</main>
+</div>
+
+<!-- layout:footer -->
+<footer class="site-footer"><div class="inner">
+  <div class="legend-tags">標記說明：
+    <span class="tag measured">實測</span>實驗資料或實拍
+    <span class="tag derived">推算</span>由程式碼或資料計算
+    <span class="tag sim">模擬</span>假設模型的示意結果
+    <span class="tag code">程式碼</span>原始碼設定值
+    <span class="tag missing">待補</span>尚無資料
+  </div>
+  <div>技術內容依韌體 commit <code>2040300</code>；<span class="mono">⌗</span> 標記可連到 GitHub 對應行號。原始碼：<a href="https://github.com/ZHANG-XICHANG/stm32f103-flight-controller" target="_blank" rel="noopener">ZHANG-XICHANG/stm32f103-flight-controller</a></div>
+</div></footer>
+<!-- /layout:footer -->
+<script src="assets/js/site.js"></script>
+</body>
+</html>

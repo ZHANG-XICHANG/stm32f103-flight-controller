@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>軟體架構 · STM32F103 四旋翼飛控</title>
+<meta name="description" content="FreeRTOS 三任務架構、優先權排程、共享資料與 6 ms 控制週期的實測驗證。">
+<meta name="theme-color" content="#0b1016">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/css/site.css">
+</head>
+<body>
+<!-- layout:header -->
+<header class="site-header"><div class="inner">
+  <a class="brand" href="index.html">STM32F103 四旋翼飛控</a>
+  <nav class="primary-nav" aria-label="章節"><ul>
+    <li><a href="index.html">首頁</a></li>
+    <li><a href="hardware.html"><span class="num">01</span>硬體</a></li>
+    <li><a href="software.html" aria-current="page"><span class="num">02</span>軟體</a></li>
+    <li><a href="ahrs.html"><span class="num">03</span>AHRS</a></li>
+    <li><a href="control.html"><span class="num">04</span>控制</a></li>
+    <li><a href="comm.html"><span class="num">05</span>通訊</a></li>
+    <li><a href="experiments.html"><span class="num">06</span>實驗</a></li>
+    <li><a href="research.html"><span class="num">07</span>研究延伸</a></li>
+    <li><a href="architecture/">架構圖</a></li>
+  </ul></nav>
+</div></header>
+<!-- /layout:header -->
+
+<div class="page has-toc">
+<aside class="toc"><div class="toc-inner"><details open><summary>本頁目錄</summary><h2>本頁目錄</h2><ol>
+  <li><a href="#tasks">三個任務</a></li>
+  <li><a href="#schedule">排程時序</a></li>
+  <li><a href="#loop">飛控迴圈</a></li>
+  <li><a href="#comm-task">通訊任務</a></li>
+  <li><a href="#shared">共享資料</a></li>
+  <li><a href="#period">週期實測</a></li>
+  <li><a href="#boot">開機流程</a></li>
+  <li><a href="#dataflow">資料流圖</a></li>
+</ol></details></div></aside>
+
+<main>
+  <div class="page-head">
+    <div class="eyebrow">02 · Software</div>
+    <h1>FreeRTOS 軟體架構</h1>
+    <p class="lead">韌體以 CMSIS-RTOS v2（FreeRTOS）建立三個週期任務。整條控制鏈放在最高優先權的飛控任務中依序執行；無線收包與 LED 指示各自獨立，彼此以全域變數加臨界區交換資料。</p>
+  </div>
+
+  <div class="tldr"><h2>本頁重點</h2><ul>
+    <li>飛控任務 High / 6 ms、通訊任務 Normal / 6 ms、LED 任務 Low / 20 ms，皆用 <code>vTaskDelayUntil</code> 固定週期。</li>
+    <li>沒有使用 Queue、Semaphore 或 Mutex；任務間共享資料以 <code>taskENTER_CRITICAL</code> 保護關鍵部分。</li>
+    <li><span class="tag measured">實測</span> 5 份遙測 CSV 中 34,772 組相鄰樣本的時間差全部為 6 ms（1 ms 解析度），期間未觀察到週期延誤。</li>
+  </ul></div>
+
+  <h2 id="tasks"><span class="sec-num">2.1</span>三個任務</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>任務</th><th>優先權</th><th class="num">週期</th><th class="num">堆疊</th><th>職責</th></tr></thead>
+    <tbody>
+      <tr><td><b>飛控</b> <code>myTask</code><br><span class="src" data-src="Core/Src/freertos.c:150-190"></span></td><td>High</td><td class="num">6 ms</td><td class="num">1024 B</td><td>狀態機 → 讀 IMU / 姿態估測 → PID → 混控與 PWM → 遙測快照</td></tr>
+      <tr><td><b>通訊</b> <code>myTask02</code><br><span class="src" data-src="Core/Src/freertos.c:199-248"></span></td><td>Normal</td><td class="num">6 ms</td><td class="num">512 B</td><td>nRF24L01P 初始化（失敗每 100 ms 重試）、每輪最多讀 3 包、排入 ACK、更新連線狀態</td></tr>
+      <tr><td><b>LED</b> <code>myTask03</code><br><span class="src" data-src="Core/Src/freertos.c:257-305"></span></td><td>Low</td><td class="num">20 ms</td><td class="num">512 B</td><td>LED2：未解鎖時亮；LED1：連線時 500 ms 閃爍、失聯時 100 ms 閃爍</td></tr>
+    </tbody>
+  </table></div>
+  <div class="sources"><span>依據</span><span class="src" data-src="Core/Src/freertos.c:44-47"></span><span class="src" data-src="Core/Src/freertos.c:64-84"></span></div>
+
+  <h2 id="schedule"><span class="sec-num">2.2</span>排程時序（示意）</h2>
+  <figure class="frame svgfig">
+    <svg data-wide viewBox="0 0 860 250" role="img" aria-label="三個任務在 0 到 24 毫秒內的釋放時刻示意圖">
+      <g font-size="12" fill="#8d9bab" font-family="Consolas, monospace">
+        <text x="120" y="232" text-anchor="middle">0</text><text x="280" y="232" text-anchor="middle">6</text><text x="440" y="232" text-anchor="middle">12</text><text x="600" y="232" text-anchor="middle">18</text><text x="760" y="232" text-anchor="middle">24 ms</text>
+        <text x="653" y="232" text-anchor="middle">20</text>
+      </g>
+      <g stroke="#1f2a37"><line x1="120" y1="20" x2="120" y2="214"/><line x1="280" y1="20" x2="280" y2="214"/><line x1="440" y1="20" x2="440" y2="214"/><line x1="600" y1="20" x2="600" y2="214"/><line x1="760" y1="20" x2="760" y2="214"/><line x1="653" y1="20" x2="653" y2="214" stroke-dasharray="3 4"/></g>
+      <g font-size="14" fill="#e6edf3"><text x="12" y="62">飛控 High</text><text x="12" y="122">通訊 Normal</text><text x="12" y="182">LED Low</text></g>
+      <g fill="#3987e5"><rect x="120" y="44" width="70" height="28" rx="4"/><rect x="280" y="44" width="70" height="28" rx="4"/><rect x="440" y="44" width="70" height="28" rx="4"/><rect x="600" y="44" width="70" height="28" rx="4"/></g>
+      <g fill="#199e70"><rect x="190" y="104" width="34" height="28" rx="4"/><rect x="350" y="104" width="34" height="28" rx="4"/><rect x="510" y="104" width="34" height="28" rx="4"/><rect x="670" y="104" width="34" height="28" rx="4"/></g>
+      <g fill="#c98500"><rect x="224" y="164" width="14" height="28" rx="3"/><rect x="704" y="164" width="14" height="28" rx="3"/></g>
+      <g fill="#c2ccd6" font-size="11"><text x="126" y="62">IMU·AHRS·PID·PWM</text><text x="194" y="152">收包 / ACK</text></g>
+      <g stroke="#8d9bab" stroke-width="1.5"><path d="M120 36 v-12 M280 36 v-12 M440 36 v-12 M600 36 v-12"/></g>
+      <text x="126" y="24" font-size="11" fill="#8d9bab">↓ 同一 tick 釋放，High 先執行</text>
+    </svg>
+    <figcaption><span class="tag derived">示意</span> 釋放時刻依程式設定週期（6 / 6 / 20 ms）繪製；<b>方塊寬度只是示意，各任務實際執行時間尚未量測</b>。兩個 6 ms 任務同時就緒時，High 優先權的飛控任務先執行，通訊任務接在後面，因此飛控任務讀到的遙控資料最多晚一個週期。</figcaption>
+  </figure>
+
+  <h2 id="loop"><span class="sec-num">2.3</span>飛控迴圈（每 6 ms）</h2>
+  <ol class="tight">
+    <li><code>FlightState_Process()</code>：在臨界區內取出並清除 <code>power</code> 事件，推進 IDLE / NORMAL / FIX_HEIGHT / FAIL 狀態 <span class="src" data-src="Core/Src/flight_state.c:72-134"></span></li>
+    <li><code>Calculate_EulerAngle()</code>：讀 MPU6050 → 陀螺低通 / 加速度 Kalman → Remap → Bias → Fusion AHRS <span class="src" data-src="Core/Src/flight.c:190-263"></span></li>
+    <li><code>Calculate_PIDOutput()</code>：先套用待處理的調參指令，再算 Pitch、Roll 串級與 Yaw 角速度環 <span class="src" data-src="Core/Src/flight.c:270-301"></span></li>
+    <li><code>Flight_control_motor()</code>：依狀態與油門混控、限幅、寫入 CCR，最後擷取遙測快照 <span class="src" data-src="Core/Src/flight.c:308-464"></span></li>
+    <li><code>vTaskDelayUntil(&amp;xLastWakeTime, 6 ms)</code>：以上次喚醒時間為基準，週期不累積漂移 <span class="src" data-src="Core/Src/freertos.c:187"></span></li>
+  </ol>
+  <p class="notice">AHRS 的取樣率直接用任務週期換算：<code>Flight_AttitudeInit(1000 / 6)</code> ≈ 166.7 Hz <span class="src" data-src="Core/Src/freertos.c:171"></span>；PID 的 dt 也寫死為 0.006 s <span class="src" data-src="Core/Inc/com_pid.h:6"></span>。兩者都假設週期準確，因此下方的週期實測很重要。</p>
+
+  <h2 id="comm-task"><span class="sec-num">2.4</span>通訊任務</h2>
+  <ul class="tight">
+    <li>無線尚未就緒時，每 100 ms 呼叫一次 <code>Receive_Init()</code>；成功後重設週期基準，避免補跑過期週期。</li>
+    <li>每輪最多處理 FIFO 中 3 包：有效控制封包呼叫 <code>FlightState_RemoteReceived()</code> 刷新連線時間；FIFO 空就提早結束；SPI 錯誤則拉低 CE 並重新初始化。</li>
+    <li>每輪最後呼叫 <code>FlightState_Update()</code> 判斷是否超過 1000 ms 未收到有效封包。</li>
+  </ul>
+  <div class="sources"><span>依據</span><span class="src" data-src="Core/Src/freertos.c:199-248"></span><span class="src" data-src="Core/Src/flight_state.c:19-38"></span></div>
+
+  <h2 id="shared"><span class="sec-num">2.5</span>任務間共享資料</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>資料</th><th>寫入</th><th>讀取</th><th>保護方式</th></tr></thead>
+    <tbody>
+      <tr><td><code>remoteData</code>（搖桿）</td><td>通訊</td><td>飛控</td><td><code>power</code> 欄位在臨界區讀取並清除；其餘欄位直接讀寫，<b>整包不是原子更新</b> <span class="src" data-src="Core/Src/flight_state.c:76-79"></span></td></tr>
+      <tr><td><code>link_state</code> / <code>last_rx_time</code></td><td>通訊</td><td>飛控、LED</td><td><code>volatile</code>，單一字組讀寫 <span class="src" data-src="Core/Src/flight_state.c:5-9"></span></td></tr>
+      <tr><td>PID 指令 pending / result</td><td>通訊 ↔ 飛控</td><td>雙向</td><td>臨界區 <span class="src" data-src="Core/Src/pid_command.c:13-50"></span></td></tr>
+      <tr><td>遙測快照 <code>latest</code></td><td>飛控</td><td>通訊</td><td>臨界區整筆複製 <span class="src" data-src="Core/Src/telemetry.c:47-63"></span></td></tr>
+    </tbody>
+  </table></div>
+  <p class="notice"><span class="tag derived">推算</span> <code>remoteData</code> 未整包保護：通訊任務逐欄寫入搖桿值時（<span class="src" data-src="Core/Src/receive.c:129-134"></span>），若剛好到了 tick 而被高優先權的飛控任務搶占，飛控任務這一輪可能讀到「一半新、一半舊」的搖桿值。發生機率低、影響只持續一個週期，README 也將它列為已知限制；改善方式是改為整包快照（類似遙測的作法）。</p>
+
+  <h2 id="period"><span class="sec-num">2.6</span>控制週期實測</h2>
+  <div class="measured-banner"><b>● 實測</b>　資料來源：<a href="experiments.html">實驗頁</a>的 5 份新格式遙測 CSV。<code>time_ms</code> 是飛控在每輪混控後以 <code>HAL_GetTick()</code> 記錄的時間 <span class="src" data-src="Core/Src/flight.c:458-463"></span>，<code>sequence</code> 每輪加 1 <span class="src" data-src="Core/Src/telemetry.c:48"></span>。</div>
+  <div class="grid">
+    <div class="card stat"><span class="value">34,772</span><span class="label">相鄰序號的樣本對</span><span class="basis">5 份 CSV 合計（重複序號已去除）</span></div>
+    <div class="card stat"><span class="value">100<small>%</small></span><span class="label">時間差恰為 6 ms</span><span class="basis">沒有任何 5 或 7 ms 以上的間隔</span></div>
+    <div class="card stat"><span class="value">1<small>ms</small></span><span class="label">量測解析度</span><span class="basis">HAL tick 為 1 kHz，無法分辨次毫秒抖動</span></div>
+  </div>
+  <p>結論：在這些錄製期間，飛控任務都在 6 ms 週期內完成並準時再次釋放。<b>這不等於量到了執行時間</b>；要知道 CPU 餘裕，需要另外以 DWT 週期計數器或 GPIO 翻轉加示波器量測（見<a href="research.html#measure">研究延伸</a>）。</p>
+
+  <h2 id="boot"><span class="sec-num">2.7</span>開機流程</h2>
+  <ol class="tight">
+    <li><code>main()</code>：HAL 初始化、72 MHz 時脈、GPIO / I2C2 / SPI1 / TIM4 / USART1 <span class="src" data-src="Core/Src/main.c"></span></li>
+    <li><code>MX_FREERTOS_Init()</code>：<code>FlightState_Init()</code>（未連線、IDLE），建立三個任務 <span class="src" data-src="Core/Src/freertos.c:102-141"></span></li>
+    <li>飛控任務：ESC 輸出 1100 µs → MPU6050 設定 → 零偏校準約 6 秒（期間以 <code>vTaskDelay</code> 讓出 CPU）→ AHRS 初始化 <span class="src" data-src="Core/Src/freertos.c:155-171"></span></li>
+    <li>通訊任務同時嘗試初始化無線模組並預載第一筆 ACK <span class="src" data-src="Core/Src/receive.c:41-62"></span></li>
+  </ol>
+  <p class="notice">校準失敗時只印出除錯訊息，後續流程仍繼續（<span class="src" data-src="Core/Src/freertos.c:162-170"></span>），README 已列為待改善。</p>
+
+  <h2 id="dataflow"><span class="sec-num">2.8</span>任務與資料流互動圖</h2>
+  <div class="embed" data-embed="architecture/02-freertos-dataflow.html" data-title="FreeRTOS 任務與資料流">
+    <div class="embed-placeholder">
+      <img src="architecture/export/02-freertos-dataflow.png" alt="FreeRTOS 任務與資料流架構圖縮圖" width="3840" height="2160" loading="lazy">
+      <button class="primary" data-load>載入互動版（可點選節點看程式碼依據）</button>
+    </div>
+    <div class="embed-bar"><span>以 Archify 依原始碼產生，節點附檔案與行號。</span><a href="architecture/02-freertos-dataflow.html" target="_blank" rel="noopener">新分頁開啟</a><a href="architecture/#2">在架構圖總覽中檢視</a></div>
+  </div>
+
+  <nav class="pager" aria-label="章節切換">
+    <a class="prev" href="hardware.html"><span class="dir">← 上一頁</span>01 硬體平台</a>
+    <a class="next" href="ahrs.html"><span class="dir">下一頁 →</span>03 姿態估測 AHRS</a>
+  </nav>
+</main>
+</div>
+
+<!-- layout:footer -->
+<footer class="site-footer"><div class="inner">
+  <div class="legend-tags">標記說明：
+    <span class="tag measured">實測</span>實驗資料或實拍
+    <span class="tag derived">推算</span>由程式碼或資料計算
+    <span class="tag sim">模擬</span>假設模型的示意結果
+    <span class="tag code">程式碼</span>原始碼設定值
+    <span class="tag missing">待補</span>尚無資料
+  </div>
+  <div>技術內容依韌體 commit <code>2040300</code>；<span class="mono">⌗</span> 標記可連到 GitHub 對應行號。原始碼：<a href="https://github.com/ZHANG-XICHANG/stm32f103-flight-controller" target="_blank" rel="noopener">ZHANG-XICHANG/stm32f103-flight-controller</a></div>
+</div></footer>
+<!-- /layout:footer -->
+<script src="assets/js/site.js"></script>
+</body>
+</html>

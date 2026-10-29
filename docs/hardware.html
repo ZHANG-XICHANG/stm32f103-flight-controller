@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>硬體平台 · STM32F103 四旋翼飛控</title>
+<meta name="description" content="飛控硬體：STM32F103C8T6、MPU6050、XRotor ESC、A2212 馬達、STM32F411 遙控器與 nRF24L01P 腳位配置。">
+<meta name="theme-color" content="#0b1016">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/css/site.css">
+</head>
+<body>
+<!-- layout:header -->
+<header class="site-header"><div class="inner">
+  <a class="brand" href="index.html">STM32F103 四旋翼飛控</a>
+  <nav class="primary-nav" aria-label="章節"><ul>
+    <li><a href="index.html">首頁</a></li>
+    <li><a href="hardware.html" aria-current="page"><span class="num">01</span>硬體</a></li>
+    <li><a href="software.html"><span class="num">02</span>軟體</a></li>
+    <li><a href="ahrs.html"><span class="num">03</span>AHRS</a></li>
+    <li><a href="control.html"><span class="num">04</span>控制</a></li>
+    <li><a href="comm.html"><span class="num">05</span>通訊</a></li>
+    <li><a href="experiments.html"><span class="num">06</span>實驗</a></li>
+    <li><a href="research.html"><span class="num">07</span>研究延伸</a></li>
+    <li><a href="architecture/">架構圖</a></li>
+  </ul></nav>
+</div></header>
+<!-- /layout:header -->
+
+<div class="page has-toc">
+<aside class="toc"><div class="toc-inner"><details open><summary>本頁目錄</summary><h2>本頁目錄</h2><ol>
+  <li><a href="#overview">系統組成</a></li>
+  <li><a href="#mcu">主控 STM32F103</a></li>
+  <li><a href="#imu">MPU6050</a></li>
+  <li><a href="#power">動力系統</a></li>
+  <li><a href="#pwm">PWM 輸出</a></li>
+  <li><a href="#radio">nRF24L01P</a></li>
+  <li><a href="#remote">F411 遙控器</a></li>
+  <li><a href="#pins">腳位配置</a></li>
+  <li><a href="#missing">待補資料</a></li>
+</ol></details></div></aside>
+
+<main>
+  <div class="page-head">
+    <div class="eyebrow">01 · Hardware</div>
+    <h1>硬體平台</h1>
+    <p class="lead">自製飛控板以 STM32F103C8T6 為核心，透過 I2C 讀取 MPU6050、SPI 驅動 nRF24L01P、TIM4 四路 PWM 驅動 ESC；操控端是另一個專案的 STM32F411 遙控器。</p>
+  </div>
+
+  <div class="tldr"><h2>本頁重點</h2><ul>
+    <li>MCU 72 MHz；IMU 走 I2C2 400 kHz、無線走 SPI1 9 Mbit/s、ESC 走 TIM4 CH1–4。</li>
+    <li>PWM 400 Hz、1 µs 解析度，輸出限制 1100–1940 µs；週期比控制迴圈（6 ms）短。</li>
+    <li>動力配置（A2212 KV980 + 20A ESC + 9450 槳 + 4S）由作者提供，見 README。</li>
+  </ul></div>
+
+  <h2 id="overview"><span class="sec-num">1.1</span>系統組成</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>功能</th><th>元件</th><th>介面 / 設定</th><th>依據</th></tr></thead>
+    <tbody>
+      <tr><td>主控</td><td>STM32F103C8T6（LQFP48）</td><td>HSE 8 MHz × PLL 9 = 72 MHz</td><td><span class="src" data-src="P01_flight_hal.ioc:53"></span> <span class="src" data-src="Core/Src/main.c:139-157"></span></td></tr>
+      <tr><td>IMU</td><td>MPU6050（6 軸）</td><td>I2C2（PB10/PB11），400 kHz</td><td><span class="src" data-src="Core/Src/i2c.c:41"></span></td></tr>
+      <tr><td>無線</td><td>nRF24L01P</td><td>SPI1（PA5/6/7）、CE PA3、CSN PA4</td><td><span class="src" data-src="Core/Inc/nRF24L01P.h:39-50"></span></td></tr>
+      <tr><td>馬達輸出</td><td>ESC × 4</td><td>TIM4 CH1–CH4（PB6–PB9）</td><td><span class="src" data-src="Core/Src/tim.c:45-70"></span></td></tr>
+      <tr><td>除錯</td><td>USART1</td><td>PA9/PA10，115200 baud</td><td><span class="src" data-src="Core/Src/usart.c"></span></td></tr>
+      <tr><td>狀態燈</td><td>LED / LED2</td><td>PB2 / PB1</td><td><span class="src" data-src="Core/Src/freertos.c:257-305"></span></td></tr>
+      <tr><td>燒錄</td><td>ST-Link</td><td>SWD（PA13/PA14）</td><td>README</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="grid two">
+    <figure class="frame">
+      <img src="images/flight-controller.png" alt="自製飛控板照片，可見 STM32 最小系統板、MPU6050 與 nRF24L01P 模組" width="313" height="417" loading="lazy" style="margin:0 auto">
+      <figcaption><span class="tag measured">實拍</span> 自製飛控板。</figcaption>
+    </figure>
+    <figure class="frame">
+      <img src="images/f450-overview.png" alt="F450 機架整機照片" width="445" height="334" loading="lazy" style="width:100%">
+      <figcaption><span class="tag measured">實拍</span> F450 機架整機。</figcaption>
+    </figure>
+  </div>
+
+  <h2 id="mcu"><span class="sec-num">1.2</span>主控 STM32F103C8T6</h2>
+  <p>Cortex-M3、72 MHz、64 KB Flash / 20 KB SRAM（C8 規格）。專案以 STM32CubeMX 產生 HAL 與 CMSIS-RTOS v2（FreeRTOS）初始化碼，FreeRTOS 系統節拍 1 kHz、heap 3 KB。</p>
+  <dl class="kv">
+    <dt>SYSCLK</dt><dd>72 MHz（HSE 8 MHz × 9） <span class="src" data-src="Core/Src/main.c:139-157"></span></dd>
+    <dt>APB1 / 計時器</dt><dd>36 MHz；APB1 計時器時脈 72 MHz <span class="src" data-src="P01_flight_hal.ioc:167-168"></span></dd>
+    <dt>FreeRTOS tick</dt><dd>1000 Hz，heap 3072 B <span class="src" data-src="Core/Inc/FreeRTOSConfig.h:64-67"></span></dd>
+  </dl>
+
+  <h2 id="imu"><span class="sec-num">1.3</span>慣性感測器 MPU6050</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>項目</th><th>設定</th><th>依據</th></tr></thead>
+    <tbody>
+      <tr><td>陀螺儀量程</td><td>±2000 °/s（16.4 LSB/°/s）</td><td><span class="src" data-src="Core/Src/MPU6050.c:71"></span></td></tr>
+      <tr><td>加速度量程</td><td>±2 g（16384 LSB/g）</td><td><span class="src" data-src="Core/Src/MPU6050.c:70"></span></td></tr>
+      <tr><td>內部數位低通</td><td>DLPF_CFG = 1（加速度約 184 Hz、陀螺約 188 Hz）</td><td><span class="src" data-src="Core/Src/MPU6050.c:83-84"></span></td></tr>
+      <tr><td>取樣率</td><td>SMPLRT_DIV = 1（註解標示 500 Hz）</td><td><span class="src" data-src="Core/Src/MPU6050.c:80-81"></span></td></tr>
+      <tr><td>飛控讀取頻率</td><td>每 6 ms 讀一次（約 166.7 Hz），不使用 FIFO</td><td><span class="src" data-src="Core/Src/flight.c:197"></span></td></tr>
+      <tr><td>開機零偏校準</td><td>1000 筆 × 6 ms ≈ 6 秒，需水平靜止、Z 軸朝上</td><td><span class="src" data-src="Core/Src/MPU6050.c:183-305"></span></td></tr>
+    </tbody>
+  </table></div>
+  <p class="notice"><span class="tag derived">推算</span> 感測器以約 500 Hz 更新、飛控以 166.7 Hz 讀取，等於只取每 3 筆中的 1 筆；高於約 83 Hz 的振動可能疊回低頻（混疊）。這是研究延伸中的改善項目之一。</p>
+
+  <h2 id="power"><span class="sec-num">1.4</span>動力系統</h2>
+  <div class="grid two">
+    <div class="table-wrap" style="margin:0"><table>
+      <thead><tr><th>元件</th><th>規格（作者提供）</th></tr></thead>
+      <tbody>
+        <tr><td>機架</td><td>F450</td></tr>
+        <tr><td>馬達</td><td>SunnySky A2212 KV980 × 4</td></tr>
+        <tr><td>ESC</td><td>XRotor 20A 4S BLDC × 4</td></tr>
+        <tr><td>槳葉</td><td>9450</td></tr>
+        <tr><td>電池</td><td>4S、6200 mAh、90C</td></tr>
+      </tbody>
+    </table></div>
+    <figure class="frame svgfig" style="margin:0">
+      <svg viewBox="0 0 360 300" role="img" aria-label="X 型四旋翼馬達編號與旋向，俯視圖">
+        <defs><marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c2ccd6"/></marker></defs>
+        <line x1="90" y1="70" x2="270" y2="230" stroke="#34445a" stroke-width="8" stroke-linecap="round"/>
+        <line x1="270" y1="70" x2="90" y2="230" stroke="#34445a" stroke-width="8" stroke-linecap="round"/>
+        <rect x="155" y="125" width="50" height="50" rx="8" fill="#18212c" stroke="#4cb5ff"/>
+        <path d="M180 120 L180 22" stroke="#4cb5ff" stroke-width="2" marker-end="url(#arr)"/>
+        <text x="190" y="30" fill="#4cb5ff" font-size="13">機頭 +X</text>
+        <path d="M150 150 L118 150" stroke="#8d9bab" stroke-width="1.5" marker-end="url(#arr)"/>
+        <text x="110" y="168" fill="#8d9bab" font-size="12" text-anchor="end">+Y 左</text>
+        <g font-size="14" text-anchor="middle">
+          <circle cx="90" cy="70" r="34" fill="none" stroke="#3987e5" stroke-width="2"/>
+          <text x="90" y="66" fill="#e6edf3" font-weight="700">M1</text><text x="90" y="84" fill="#3987e5" font-size="12">CCW ↺</text>
+          <circle cx="270" cy="70" r="34" fill="none" stroke="#d95926" stroke-width="2"/>
+          <text x="270" y="66" fill="#e6edf3" font-weight="700">M2</text><text x="270" y="84" fill="#d95926" font-size="12">CW ↻</text>
+          <circle cx="270" cy="230" r="34" fill="none" stroke="#3987e5" stroke-width="2"/>
+          <text x="270" y="226" fill="#e6edf3" font-weight="700">M3</text><text x="270" y="244" fill="#3987e5" font-size="12">CCW ↺</text>
+          <circle cx="90" cy="230" r="34" fill="none" stroke="#d95926" stroke-width="2"/>
+          <text x="90" y="226" fill="#e6edf3" font-weight="700">M4</text><text x="90" y="244" fill="#d95926" font-size="12">CW ↻</text>
+        </g>
+        <text x="180" y="292" fill="#8d9bab" font-size="11" text-anchor="middle">俯視；PB6→M1、PB7→M2、PB8→M3、PB9→M4</text>
+      </svg>
+      <figcaption>馬達編號依 <span class="src" data-src="Core/Src/flight.c:350-381"></span>；旋向由作者確認（README）。混控公式見 <a href="control.html#mixer">控制 · 混控</a>。</figcaption>
+    </figure>
+  </div>
+
+  <h2 id="pwm"><span class="sec-num">1.5</span>PWM 輸出（TIM4）</h2>
+  <div class="formula">計時器時脈 72 MHz ÷ (PSC 71 + 1) = 1 MHz  → 1 tick = 1 µs
+PWM 週期 = (ARR 2499 + 1) × 1 µs = 2.5 ms  → 400 Hz
+CCR = 脈寬 µs；限幅 1100 – 1940 µs；停機 = 1100 µs</div>
+  <div class="sources"><span>依據</span><span class="src" data-src="Core/Src/tim.c:45-47"></span><span class="src" data-src="P01_flight_hal.ioc:168"></span><span class="src" data-src="Core/Inc/ESC.h:7-9"></span><span class="src" data-src="Core/Src/ESC.c:61-79"></span></div>
+  <ul class="tight">
+    <li><span class="tag derived">推算</span> 控制迴圈每 6 ms 更新一次 CCR，PWM 每 2.5 ms 送出一個脈波，所以同一個指令會重複送出 2–3 個脈波。</li>
+    <li><code>ESC_Stop()</code> 持續輸出 1100 µs 而非關閉 PWM；實際是否停轉取決於 ESC 油門校準。</li>
+    <li>油門 0–1000 線性映射到 1100–1940 µs <span class="src" data-src="Core/Src/flight.c:117-130"></span>。</li>
+  </ul>
+
+  <h2 id="radio"><span class="sec-num">1.6</span>無線模組 nRF24L01P（飛控端）</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>項目</th><th>設定</th><th>依據</th></tr></thead>
+    <tbody>
+      <tr><td>角色</td><td>PRX（接收端），管道 0</td><td><span class="src" data-src="Core/Src/nRF24L01P.c:544-575"></span></td></tr>
+      <tr><td>頻道</td><td>40（2440 MHz）</td><td><span class="src" data-src="Core/Inc/nRF24L01P.h:47"></span></td></tr>
+      <tr><td>速率 / 功率</td><td>2 Mbps / 0 dBm</td><td><span class="src" data-src="Core/Inc/nRF24L01P.h:48"></span></td></tr>
+      <tr><td>CRC / 位址</td><td>2 B CRC；5 B 位址</td><td><span class="src" data-src="Core/Inc/nRF24L01P.h:43-46"></span></td></tr>
+      <tr><td>自動重送</td><td>ARD 500 µs、ARC 5（31 B ACK 所需）</td><td><span class="src" data-src="Core/Inc/nRF24L01P.h:49-50"></span></td></tr>
+      <tr><td>功能</td><td>動態酬載長度（DPL）+ ACK Payload</td><td><span class="src" data-src="Core/Src/nRF24L01P.c:552-553"></span></td></tr>
+      <tr><td>收包方式</td><td>輪詢 FIFO_STATUS，未接 IRQ 腳位</td><td><span class="src" data-src="Core/Src/receive.c:68-85"></span></td></tr>
+    </tbody>
+  </table></div>
+
+  <h2 id="remote"><span class="sec-num">1.7</span>STM32F411 遙控器</h2>
+  <div class="grid two">
+    <figure class="frame">
+      <img src="images/remote-controller.jpg" alt="自製雙搖桿無線遙控器照片" width="1477" height="1108" loading="lazy">
+      <figcaption><span class="tag measured">實拍</span> 自製雙搖桿遙控器。</figcaption>
+    </figure>
+    <div>
+      <p>遙控器韌體位於獨立儲存庫 <a href="https://github.com/ZHANG-XICHANG/stm32f411-remote-controller" target="_blank" rel="noopener">stm32f411-remote-controller</a>（原專案名 <code>F411_remote_hal</code>），<b>不在本 repo 內</b>。本站只依飛控端的解析程式描述它應送出的內容：</p>
+      <ul class="tight">
+        <li>PTX 端，送出 17 B 控制封包（油門、Yaw、Pitch、Roll 各 0–1000）。</li>
+        <li>USB 橋接：把電腦的 <code>PID,…</code> / <code>AXIS,…</code> 指令轉成 24 B 無線指令，再把 ACK 中的遙測轉成 <code>TEL,…</code> 文字列。</li>
+        <li>兩端必須同步使用 ARD 500 µs，否則 31 B ACK 收不完整（<span class="src" data-src="docs/telemetry.md:6-11"></span>）。</li>
+      </ul>
+      <div class="missing-box"><h4>本 repo 無法確認</h4><ul class="tight"><li>遙控器的送包頻率、重送與逾時策略、搖桿 ADC 處理。</li><li>與本飛控相容的遙控器韌體版本 / commit。</li></ul></div>
+    </div>
+  </div>
+
+  <h2 id="pins"><span class="sec-num">1.8</span>腳位配置</h2>
+  <div class="grid two">
+    <div class="table-wrap" style="margin:0"><table>
+      <thead><tr><th>STM32 腳位</th><th>功能</th><th>連接</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">PB10 / PB11</td><td>I2C2 SCL / SDA</td><td>MPU6050</td></tr>
+        <tr><td class="mono">PA5 / PA6 / PA7</td><td>SPI1 SCK / MISO / MOSI</td><td>nRF24L01P</td></tr>
+        <tr><td class="mono">PA3 / PA4</td><td>CE / CSN</td><td>nRF24L01P</td></tr>
+        <tr><td class="mono">PB6 – PB9</td><td>TIM4 CH1 – CH4</td><td>M1 – M4 ESC 訊號</td></tr>
+        <tr><td class="mono">PA9 / PA10</td><td>USART1 TX / RX</td><td>除錯串口</td></tr>
+        <tr><td class="mono">PA13 / PA14</td><td>SWDIO / SWCLK</td><td>ST-Link</td></tr>
+        <tr><td class="mono">PB1 / PB2</td><td>GPIO</td><td>LED2 / LED</td></tr>
+      </tbody>
+    </table></div>
+    <figure class="frame" style="margin:0">
+      <img src="images/pinout.png" alt="STM32CubeMX 腳位配置截圖" width="930" height="928" loading="lazy">
+      <figcaption>STM32CubeMX 腳位配置（<span class="src" data-src="P01_flight_hal.ioc"></span>）。</figcaption>
+    </figure>
+  </div>
+
+  <div class="missing-box" id="missing">
+    <h3>待補的硬體資料</h3>
+    <ul class="tight">
+      <li>電源架構與接線圖（電池 → ESC / BEC → 飛控 3.3 V、nRF24L01P 供電與去耦）。</li>
+      <li>整機重量、推重比、馬達推力測試數據。</li>
+      <li>飛控板電路圖或 PCB 檔（若為洞洞板，建議補接線照片）。</li>
+      <li>IMU 減震方式與安裝方向照片（韌體假設 IMU 軸與機體軸一致）。</li>
+    </ul>
+  </div>
+
+  <nav class="pager" aria-label="章節切換">
+    <a class="prev" href="index.html"><span class="dir">← 上一頁</span>首頁</a>
+    <a class="next" href="software.html"><span class="dir">下一頁 →</span>02 軟體架構</a>
+  </nav>
+</main>
+</div>
+
+<!-- layout:footer -->
+<footer class="site-footer"><div class="inner">
+  <div class="legend-tags">標記說明：
+    <span class="tag measured">實測</span>實驗資料或實拍
+    <span class="tag derived">推算</span>由程式碼或資料計算
+    <span class="tag sim">模擬</span>假設模型的示意結果
+    <span class="tag code">程式碼</span>原始碼設定值
+    <span class="tag missing">待補</span>尚無資料
+  </div>
+  <div>技術內容依韌體 commit <code>2040300</code>；<span class="mono">⌗</span> 標記可連到 GitHub 對應行號。原始碼：<a href="https://github.com/ZHANG-XICHANG/stm32f103-flight-controller" target="_blank" rel="noopener">ZHANG-XICHANG/stm32f103-flight-controller</a></div>
+</div></footer>
+<!-- /layout:footer -->
+<script src="assets/js/site.js"></script>
+</body>
+</html>

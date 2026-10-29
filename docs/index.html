@@ -2,10 +2,160 @@
 <html lang="zh-Hant-TW">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="refresh" content="0; url=architecture/">
-<title>飛控架構說明</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>STM32F103 四旋翼飛控</title>
+<meta name="description" content="以 STM32F103、FreeRTOS、MPU6050 與 Fusion AHRS 自製的四旋翼飛控，含串級 PID、nRF24L01P ACK 遙測與線上調參，已於 F450 機架實飛。">
+<meta name="theme-color" content="#0b1016">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/css/site.css">
 </head>
 <body>
-<p>前往 <a href="architecture/">飛控架構說明</a>。</p>
+<!-- layout:header -->
+<header class="site-header"><div class="inner">
+  <a class="brand" href="index.html">STM32F103 四旋翼飛控</a>
+  <nav class="primary-nav" aria-label="章節"><ul>
+    <li><a href="index.html" aria-current="page">首頁</a></li>
+    <li><a href="hardware.html"><span class="num">01</span>硬體</a></li>
+    <li><a href="software.html"><span class="num">02</span>軟體</a></li>
+    <li><a href="ahrs.html"><span class="num">03</span>AHRS</a></li>
+    <li><a href="control.html"><span class="num">04</span>控制</a></li>
+    <li><a href="comm.html"><span class="num">05</span>通訊</a></li>
+    <li><a href="experiments.html"><span class="num">06</span>實驗</a></li>
+    <li><a href="research.html"><span class="num">07</span>研究延伸</a></li>
+    <li><a href="architecture/">架構圖</a></li>
+  </ul></nav>
+</div></header>
+<!-- /layout:header -->
+
+<div class="page">
+<main>
+  <section class="hero">
+    <div>
+      <div class="eyebrow">大學專題 · 嵌入式即時控制</div>
+      <h1>以 STM32F103 與 FreeRTOS 自製四旋翼飛控</h1>
+      <p class="lead">
+        從 MPU6050 感測、Fusion 姿態估測、Roll/Pitch 串級 PID，到 X 型混控與 TIM4 PWM 輸出，全部在一顆 72 MHz 的 STM32F103 上完成；
+        搭配自製 STM32F411 遙控器、nRF24L01P 雙向無線鏈路與 Python 即時調參工具，已在 F450 機架上實際飛行。
+      </p>
+      <div class="actions">
+        <a class="btn primary" href="https://youtu.be/hEEcJP3LDC0" target="_blank" rel="noopener">▶ 觀看實飛影片（YouTube）</a>
+        <a class="btn" href="architecture/">系統架構圖</a>
+        <a class="btn" href="experiments.html">實驗資料</a>
+      </div>
+    </div>
+    <figure class="frame" style="margin:0">
+      <img src="images/f450-overview.png" alt="搭載自製飛控板的 F450 四旋翼整機照片" width="445" height="334" loading="eager" style="width:100%">
+      <figcaption><span class="tag measured">實拍</span> F450 機架整機，搭載自製飛控板與 nRF24L01P 模組。</figcaption>
+    </figure>
+  </section>
+
+  <div class="tldr">
+    <h2>30 秒重點</h2>
+    <ul>
+      <li><b>完整控制鏈自行實作</b>：感測 → 濾波 → AHRS → 串級 PID → 混控 → PWM，每 6 ms 在同一個 FreeRTOS 任務內依序執行。</li>
+      <li><b>雙向無線</b>：遙控指令走上行封包，遙測與調參結果藉 nRF24L01P 的 <i>ACK Payload</i> 回傳，不需切換收發模式。</li>
+      <li><b>可量測、可調整</b>：31 B 遙測封包把 PID 各項與四路 PWM 送回電腦，可在飛行中線上改寫 Kp/Ki/Kd。</li>
+      <li><b>實機驗證</b>：F450 實飛影片、測試架調參截圖與 6 份遙測 CSV（約 5.1 萬筆樣本）皆收錄於本站。</li>
+    </ul>
+  </div>
+
+  <h2 id="results">成果一覽</h2>
+  <div class="grid">
+    <div class="card stat"><span class="value">6.0<small>ms</small></span><span class="label">控制週期</span>
+      <span class="basis"><span class="tag code">程式碼</span> <span class="src" data-src="Core/Src/freertos.c:46"></span><br><span class="tag measured">實測</span> 5 份 CSV 的 time_ms 間隔平均皆為 6.0 ms</span></div>
+    <div class="card stat"><span class="value">3<small>個任務</small></span><span class="label">FreeRTOS：飛控 / 通訊 / LED</span>
+      <span class="basis"><span class="tag code">程式碼</span> <span class="src" data-src="Core/Src/freertos.c:64-84"></span></span></div>
+    <div class="card stat"><span class="value">31<small>B</small></span><span class="label">ACK Payload 遙測封包</span>
+      <span class="basis"><span class="tag code">程式碼</span> <span class="src" data-src="Core/Inc/telemetry_wire.h:9"></span></span></div>
+    <div class="card stat"><span class="value">1000<small>ms</small></span><span class="label">失聯保護門檻（逾時即停機）</span>
+      <span class="basis"><span class="tag code">程式碼</span> <span class="src" data-src="Core/Inc/flight_state.h:8"></span></span></div>
+  </div>
+
+  <div class="grid two" style="margin-top:16px">
+    <figure class="frame">
+      <a class="video-link" href="https://youtu.be/hEEcJP3LDC0" target="_blank" rel="noopener">
+        <img src="images/flight-test.png" alt="F450 四旋翼在校園建築前戶外懸停飛行" width="1269" height="714" loading="lazy">
+        <span class="play">▶ YouTube 實飛影片合輯</span>
+      </a>
+      <figcaption><span class="tag measured">實拍</span> 戶外實飛（影片截圖）。影片中使用的 PID 參數與原始碼預設值一致（依 README 作者說明）。</figcaption>
+    </figure>
+    <figure class="frame">
+      <img src="images/tuning-rig.png" alt="四旋翼固定在單軸測試架上進行調參" width="554" height="415" loading="lazy">
+      <figcaption><span class="tag measured">實拍</span> 測試架上的調參過程：機體以橫桿固定，可單軸轉動，用於安全地調整 Roll / Pitch 迴路。</figcaption>
+    </figure>
+  </div>
+
+  <h2 id="motivation">動機與目標</h2>
+  <div class="grid two">
+    <div class="card">
+      <h3>專案起點</h3>
+      <p>專案最初跟隨 <a href="https://www.bilibili.com/video/BV1f8rbBSEq3/" target="_blank" rel="noopener">Bilibili 教學影片（BV1f8rbBSEq3）</a> 入門，之後逐步改寫為目前的架構：改用 Fusion AHRS、加入串級 PID、ACK 遙測、線上調參與主機端測試，最後完成 F450 實飛。</p>
+      <div class="missing-box">
+        <h4>待作者補充</h4>
+        <ul class="tight"><li>選擇自製飛控（而非使用現成飛控）的個人動機與想驗證的問題。</li><li>與教學原始版本相比，哪些部分是自行設計或改寫（建議附 commit 對照）。</li></ul>
+      </div>
+    </div>
+    <div class="card">
+      <h3>專案目標（依已完成的實作整理）</h3>
+      <ol class="tight">
+        <li>不依賴現成飛控韌體，自行完成「感測 → 姿態 → 控制 → 輸出」完整鏈路。</li>
+        <li>以 FreeRTOS 分離飛控、通訊與指示燈任務，維持固定 6 ms 控制週期。</li>
+        <li>建立可觀測、可調整的工具鏈：遙測回傳、CSV 記錄、線上改寫 PID。</li>
+        <li>加入失聯保護與解鎖條件，在測試架與實機上驗證。</li>
+      </ol>
+    </div>
+  </div>
+
+  <h2 id="features">技術特色</h2>
+  <div class="grid wide">
+    <div class="card"><h3>串級 PID 與量測微分</h3><p>Roll/Pitch 角度外環輸出角速度目標，內環以陀螺儀回授；內環 D 項取量測值微分並經 10 Hz 低通，避免設定值跳變造成微分尖峰。</p>
+      <div class="sources"><span class="src" data-src="Core/Src/com_pid.c:6-67"></span></div></div>
+    <div class="card"><h3>ACK Payload 雙向通訊</h3><p>飛控端維持 PRX 接收模式，把遙測或調參結果預先排入 ACK；遙控器每送一包控制封包就順帶取回一份資料。</p>
+      <div class="sources"><span class="src" data-src="Core/Src/receive.c:15-39"></span></div></div>
+    <div class="card"><h3>可靠的線上調參協定</h3><p>24 B 指令含版本、序號與 CRC16；同序號去重，結果在奇數序號 ACK 中最多重排 8 次，抵抗 ACK 遺失。</p>
+      <div class="sources"><span class="src" data-src="Core/Src/pid_command.c:1-51"></span></div></div>
+    <div class="card"><h3>失聯與解鎖保護</h3><p>1000 ms 未收到有效控制封包即進入 FAIL 並停機；解鎖需油門最低、三軸置中並收到 power 事件。</p>
+      <div class="sources"><span class="src" data-src="Core/Src/flight_state.c:49-134"></span></div></div>
+    <div class="card"><h3>主機端測試</h3><p>PID、無線驅動、調參協定與遙測編碼皆有 C 主機端測試；Python 工具也有單元測試。</p>
+      <div class="sources"><span class="src" data-src="tests/pid/test_pid.c"></span><span class="src" data-src="tests/telemetry/test_telemetry.c"></span></div></div>
+    <div class="card"><h3>可視化調參工具</h3><p><code>pid_tune.py</code> 同時顯示姿態角、目標/實際角速度、誤差、P/D/輸出與四路 PWM，並記錄 CSV。</p>
+      <div class="sources"><span class="src" data-src="pid_tune.py"></span></div></div>
+  </div>
+
+  <h2 id="chapters">章節導覽</h2>
+  <div class="grid">
+    <a class="card" href="hardware.html"><h3>01 硬體</h3><p class="muted">STM32F103C8T6、MPU6050、ESC、馬達、F411 遙控器與腳位。</p><span class="go">閱讀 →</span></a>
+    <a class="card" href="software.html"><h3>02 軟體</h3><p class="muted">FreeRTOS 三任務、排程、共享資料與 6 ms 控制週期。</p><span class="go">閱讀 →</span></a>
+    <a class="card" href="ahrs.html"><h3>03 AHRS</h3><p class="muted">濾波、Fusion、四元數與歐拉角；可拖曳的 3D 姿態模型。</p><span class="go">閱讀 →</span></a>
+    <a class="card" href="control.html"><h3>04 控制</h3><p class="muted">互動式串級 PID 方塊圖、混控計算器與示意模擬。</p><span class="go">閱讀 →</span></a>
+    <a class="card" href="comm.html"><h3>05 通訊</h3><p class="muted">封包格式、ACK Payload 時序、序號與失聯保護。</p><span class="go">閱讀 →</span></a>
+    <a class="card" href="experiments.html"><h3>06 實驗</h3><p class="muted">真實遙測 CSV 檢視器、4 Hz 振盪分析與調參紀錄。</p><span class="go">閱讀 →</span></a>
+    <a class="card" href="research.html"><h3>07 研究延伸</h3><p class="muted">控制器、濾波、系統識別與後續研究規劃。</p><span class="go">閱讀 →</span></a>
+    <a class="card" href="architecture/"><h3>互動架構圖</h3><p class="muted">四張可點選節點、附程式碼行號的架構圖。</p><span class="go">開啟 →</span></a>
+  </div>
+
+  <h2 id="limits">目前限制（誠實揭露）</h2>
+  <ul class="tight">
+    <li>定高未實作：<code>FIX_HEIGHT</code> 狀態只會停止馬達 <span class="src" data-src="Core/Src/flight.c:439-441"></span>。</li>
+    <li>未使用磁力計，Yaw 只有角速度控制，沒有絕對航向保持。</li>
+    <li>PID 沒有輸出限幅與積分抗飽和；任務實際執行時間尚未量測。</li>
+    <li>收錄的遙測 CSV 來自調參早期（增益與目前原始碼不同），詳見 <a href="experiments.html">實驗</a>。</li>
+  </ul>
+</main>
+</div>
+
+<!-- layout:footer -->
+<footer class="site-footer"><div class="inner">
+  <div class="legend-tags">標記說明：
+    <span class="tag measured">實測</span>實驗資料或實拍
+    <span class="tag derived">推算</span>由程式碼或資料計算
+    <span class="tag sim">模擬</span>假設模型的示意結果
+    <span class="tag code">程式碼</span>原始碼設定值
+    <span class="tag missing">待補</span>尚無資料
+  </div>
+  <div>技術內容依韌體 commit <code>2040300</code>；<span class="mono">⌗</span> 標記可連到 GitHub 對應行號。原始碼：<a href="https://github.com/ZHANG-XICHANG/stm32f103-flight-controller" target="_blank" rel="noopener">ZHANG-XICHANG/stm32f103-flight-controller</a></div>
+</div></footer>
+<!-- /layout:footer -->
+<script src="assets/js/site.js"></script>
 </body>
 </html>
