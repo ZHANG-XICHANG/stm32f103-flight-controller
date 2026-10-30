@@ -1,0 +1,188 @@
+/* @theme fc-dark */
+/* STM32F103 飛控專題簡報：深色工程風格，16:9（1280×720）。 */
+@import 'default';
+
+:root {
+  --bg: #0B1220;
+  --surface: #111A2B;
+  --surface-2: #17233A;
+  --line: #26344A;
+  --ink: #E6EDF6;
+  --muted: #9AA8BA;
+  --accent: #4EA1FF;
+  --teal: #2DD4BF;
+  --amber: #F5A524;
+  --rose: #F472B6;
+  --red: #F87171;
+  --font: 'Noto Sans TC', 'Microsoft JhengHei', 'PingFang TC', sans-serif;
+  --mono: 'Cascadia Mono', Consolas, 'Noto Sans Mono', monospace;
+}
+
+section {
+  width: 1280px;
+  height: 720px;
+  padding: 56px 64px 52px;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 23px;
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+}
+
+section::after {
+  /* 頁碼 */
+  content: attr(data-marpit-pagination) ' / ' attr(data-marpit-pagination-total);
+  right: 64px;
+  bottom: 20px;
+  font-size: 14px;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+footer {
+  left: 64px;
+  bottom: 18px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+h1, h2, h3 { color: var(--ink); margin: 0; font-weight: 700; }
+h1 { font-size: 46px; line-height: 1.25; }
+h2 {
+  font-size: 34px;
+  padding-left: 18px;
+  border-left: 6px solid var(--accent);
+  margin-bottom: 22px;
+  line-height: 1.2;
+}
+h2 small { font-size: 18px; font-weight: 400; color: var(--muted); margin-left: 14px; }
+h3 { font-size: 22px; color: var(--accent); margin-bottom: 8px; }
+p { margin: 0 0 10px; }
+strong { color: #FFFFFF; }
+em { color: var(--amber); font-style: normal; }
+a { color: var(--accent); text-decoration: none; }
+code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  background: var(--surface-2);
+  color: #CFE3FF;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+ul, ol { margin: 0; padding-left: 1.1em; }
+li { margin: 4px 0; }
+li::marker { color: var(--accent); }
+
+img { background: transparent; }
+
+/* 覆寫 default 主題的淺色表格 */
+section table {
+  border-collapse: collapse;
+  font-size: 18px;
+  width: 100%;
+  display: table;
+  margin: 0;
+}
+section table tr { background-color: transparent; border-top: none; }
+section table tr:nth-child(2n) { background-color: rgba(255, 255, 255, 0.03); }
+section table th,
+section table td {
+  border: none;
+  border-bottom: 1px solid var(--line);
+  padding: 6px 10px;
+  text-align: left;
+  background: transparent;
+  color: var(--ink);
+}
+section table th { color: var(--muted); font-weight: 500; font-size: 16px; }
+section table td:first-child { white-space: nowrap; }
+section table code { font-size: 0.82em; }
+
+/* 版面工具 */
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; align-items: start; flex: 1; min-height: 0; }
+.cols.w64 { grid-template-columns: 1.6fr 1fr; }
+.cols.w46 { grid-template-columns: 1fr 1.5fr; }
+.cols.three { grid-template-columns: repeat(3, 1fr); gap: 22px; }
+.center { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.fig { display: flex; flex-direction: column; min-height: 0; }
+.fig.fixed { flex: none; }
+.fig img { width: 100%; height: auto; border-radius: 6px; display: block; }
+.fig .cap { font-size: 14px; color: var(--muted); margin-top: 6px; }
+.muted { color: var(--muted); }
+.small { font-size: 18px; }
+.tiny { font-size: 15px; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 18px 20px;
+}
+.card h3 { margin-bottom: 6px; }
+.card p, .card li { font-size: 19px; color: #C9D4E2; }
+
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 18px; }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; }
+.kpi b { display: block; font-family: var(--mono); font-size: 34px; color: var(--accent); line-height: 1.1; }
+.kpi span { font-size: 15px; color: var(--muted); }
+
+/* 資料性質標記（與展示網站一致） */
+.tag {
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: 4px;
+  vertical-align: 2px;
+  margin-right: 6px;
+  border: 1px solid currentColor;
+}
+.tag.measured { color: var(--amber); }
+.tag.derived { color: var(--teal); }
+.tag.code { color: var(--accent); }
+.tag.missing { color: var(--red); }
+.tag.sim { color: var(--rose); }
+
+.src { font-family: var(--mono); font-size: 13px; color: var(--muted); }
+
+/* 管線方塊 */
+.flow { display: flex; align-items: stretch; gap: 0; margin: 8px 0 18px; }
+.flow .node {
+  flex: 1;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 16px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+.flow .node b { display: block; color: var(--ink); font-size: 18px; margin-bottom: 2px; }
+.flow .node.hl { border-color: var(--accent); }
+.flow .arrow { align-self: center; color: var(--accent); font-size: 22px; padding: 0 6px; }
+
+.status { display: grid; grid-template-columns: auto 1fr auto; gap: 8px 16px; align-items: center; font-size: 20px; }
+.ok { color: var(--teal); font-weight: 700; }
+.no { color: var(--red); font-weight: 700; }
+
+/* 封面 */
+section.cover { padding: 0; flex-direction: row; }
+section.cover::after { display: none; }
+section.cover .left { flex: 1.15; padding: 80px 56px 56px 72px; display: flex; flex-direction: column; justify-content: center; }
+section.cover .right { flex: 1; background-size: cover; background-position: center; position: relative; }
+section.cover .right::before { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, var(--bg) 0%, rgba(11, 18, 32, 0) 35%); }
+section.cover .kicker { font-family: var(--mono); color: var(--accent); font-size: 18px; letter-spacing: 0.08em; margin-bottom: 18px; }
+section.cover h1 { font-size: 50px; margin-bottom: 18px; }
+section.cover .sub { font-size: 22px; color: var(--muted); margin-bottom: 36px; }
+section.cover .meta { font-size: 17px; color: var(--muted); line-height: 1.8; }
+
+/* 章節結尾大字 */
+section.lead h2 { border: none; padding: 0; font-size: 40px; }
+
+/* MathJax */
+mjx-container { color: var(--ink); }
+.eq { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 6px 16px; margin: 6px 0 12px; font-size: 20px; }
